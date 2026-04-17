@@ -2,6 +2,7 @@ requests
 beautifulsoup4
 openai
 akshare
+baostock
 pandas
 numpy
 fake-useragent
