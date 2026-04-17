@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-数据库模块：SQLite 操作
+数据库模块：SQLite 操作（自动创建目录）
 """
 
+import os
 import sqlite3
 import hashlib
 from datetime import datetime
@@ -12,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self, db_path='data/finance.db'):
+        # ✅ 关键修复：确保数据库文件所在目录存在
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+            logger.info(f"创建目录: {db_dir}")
         self.db_path = db_path
         self.conn = None
     
@@ -26,7 +32,6 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # 新闻原始表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS news_raw (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +45,6 @@ class Database:
             )
         ''')
         
-        # AI分析结果表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS news_analysis (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,7 +62,6 @@ class Database:
             )
         ''')
         
-        # 资金流数据表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS fund_flow (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,7 +73,6 @@ class Database:
             )
         ''')
         
-        # 大盘数据表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS market_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +89,6 @@ class Database:
         logger.info("数据库初始化完成")
     
     def insert_news(self, news: dict) -> int:
-        """插入新闻，返回ID；若已存在返回0"""
         fingerprint = self._calc_fingerprint(news)
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -103,7 +104,6 @@ class Database:
             return 0
     
     def _calc_fingerprint(self, news: dict) -> str:
-        """MD5指纹：标题+来源+发布时间前10分钟"""
         base = f"{news['title']}|{news['source']}|{news['time'][:16] if news['time'] else ''}"
         return hashlib.md5(base.encode()).hexdigest()
     
@@ -130,13 +130,11 @@ class Database:
     def insert_fund_flow(self, fund_data: dict):
         conn = self.get_connection()
         cursor = conn.cursor()
-        # 北向资金
         north = fund_data.get('north_flow', {})
         if north:
             cursor.execute('''
                 INSERT INTO fund_flow (date, type, value) VALUES (?, ?, ?)
             ''', (north.get('date'), 'north', north.get('net_inflow', 0)))
-        # 板块资金
         for sector_flow in fund_data.get('sector_flows', []):
             cursor.execute('''
                 INSERT INTO fund_flow (date, type, value, sector) VALUES (?, ?, ?, ?)
