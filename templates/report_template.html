@@ -1,16 +1,300 @@
-{
-  "proxy": null,
-  "deepseek": {
-    "model": "deepseek-chat",
-    "temperature": 0.3
-  },
-  "signal": {
-    "min_score": 8,
-    "min_confidence": 0.7,
-    "allow_expectations": ["超预期", "部分预期"]
-  },
-  "report": {
-    "title": "财经AI决策报告",
-    "max_news": 30
-  }
-}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>📈 财经AI决策仪表盘</title>
+    <!-- ECharts CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #f0f2f5;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            padding: 20px;
+        }
+        .dashboard {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 1.8rem;
+            margin-bottom: 0.5rem;
+            color: #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .subtitle {
+            color: #64748b;
+            margin-bottom: 1.5rem;
+            border-left: 4px solid #3b82f6;
+            padding-left: 12px;
+        }
+        /* 卡片网格 */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .kpi-card {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            transition: transform 0.2s;
+        }
+        .kpi-card:hover { transform: translateY(-3px); }
+        .kpi-title {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #64748b;
+            margin-bottom: 10px;
+        }
+        .kpi-value {
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: #0f172a;
+        }
+        .kpi-unit {
+            font-size: 1rem;
+            font-weight: normal;
+            color: #475569;
+        }
+        .trend-up { color: #10b981; }
+        .trend-down { color: #ef4444; }
+        
+        /* 图表双栏 */
+        .charts-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .chart-card {
+            background: white;
+            border-radius: 20px;
+            padding: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .chart-title {
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #334155;
+        }
+        .chart-container {
+            width: 100%;
+            height: 300px;
+        }
+        
+        /* 信号卡片区 */
+        .signals-section {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .section-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 16px;
+            border-left: 4px solid #3b82f6;
+            padding-left: 12px;
+        }
+        .signal-cards {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .signal-item {
+            background: #f8fafc;
+            border-radius: 16px;
+            padding: 16px;
+            border-left: 4px solid #10b981;
+        }
+        .signal-title {
+            font-weight: 600;
+            font-size: 1rem;
+            margin-bottom: 8px;
+        }
+        .signal-meta {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            font-size: 0.85rem;
+            color: #475569;
+        }
+        .badge {
+            background: #e2e8f0;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+        }
+        .badge-buy { background: #d1fae5; color: #065f46; }
+        
+        /* 新闻表格 */
+        .news-table-wrapper {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            overflow-x: auto;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        th {
+            text-align: left;
+            padding: 12px 8px;
+            background: #f1f5f9;
+            color: #1e293b;
+        }
+        td {
+            padding: 10px 8px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            padding: 20px;
+            color: #94a3b8;
+            font-size: 0.75rem;
+        }
+        @media (max-width: 700px) {
+            .charts-row { grid-template-columns: 1fr; }
+            .kpi-value { font-size: 1.6rem; }
+        }
+    </style>
+</head>
+<body>
+<div class="dashboard">
+    <h1>📊 财经AI决策仪表盘</h1>
+    <div class="subtitle">基于 DeepSeek 多因子共振策略 · 自动生成报告</div>
+    
+    <!-- KPI 卡片 -->
+    <div class="kpi-grid">
+        <div class="kpi-card">
+            <div class="kpi-title">📡 今日信号</div>
+            <div class="kpi-value">{{ signals_count }} <span class="kpi-unit">个</span></div>
+            <div class="trend-up">买入建议</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-title">🎯 平均AI评分</div>
+            <div class="kpi-value">{{ avg_score }}<span class="kpi-unit">/10</span></div>
+            <div>置信度 {{ avg_confidence }}</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-title">📰 分析新闻数</div>
+            <div class="kpi-value">{{ news_count }}</div>
+            <div>今日更新</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-title">💰 北向资金(估算)</div>
+            <div class="kpi-value {% if north_flow > 0 %}trend-up{% else %}trend-down{% endif %}">
+                {{ north_flow_str }}
+            </div>
+            <div>近3日净流入</div>
+        </div>
+    </div>
+    
+    <!-- 图表双栏 -->
+    <div class="charts-row">
+        <div class="chart-card">
+            <div class="chart-title">📊 AI评分分布</div>
+            <div id="scoreChart" class="chart-container"></div>
+        </div>
+        <div class="chart-card">
+            <div class="chart-title">🧠 情绪占比</div>
+            <div id="sentimentChart" class="chart-container"></div>
+        </div>
+    </div>
+    
+    <!-- 交易信号区域 -->
+    <div class="signals-section">
+        <div class="section-title">🔔 今日买入信号（满足所有条件）</div>
+        {% if signals %}
+        <div class="signal-cards">
+            {% for sig in signals %}
+            <div class="signal-item">
+                <div class="signal-title">{{ sig.title }}</div>
+                <div class="signal-meta">
+                    <span>⭐ 评分 {{ sig.score }}</span>
+                    <span>📊 置信度 {{ sig.confidence }}</span>
+                    <span>⚡ 预期差 {{ sig.expectation }}</span>
+                    <span class="badge badge-buy">建议仓位 {{ sig.position }}%</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div style="color: #64748b; padding: 20px; text-align: center;">暂无符合条件的买入信号（大盘/资金/评分未共振）</div>
+        {% endif %}
+    </div>
+    
+    <!-- 新闻列表 -->
+    <div class="news-table-wrapper">
+        <div class="section-title">📰 最新财经新闻 & AI分析</div>
+        <table>
+            <thead>
+                <tr><th>标题</th><th>时间</th><th>来源</th><th>情绪</th><th>评分</th><th>置信度</th><th>预期差</th></tr>
+            </thead>
+            <tbody>
+                {% for item in news_list %}
+                <tr>
+                    <td>{{ item.title }}</td>
+                    <td>{{ item.time }}</td>
+                    <td>{{ item.source }}</td>
+                    <td>{% if item.sentiment == '利好' %}🟢 利好{% elif item.sentiment == '利空' %}🔴 利空{% else %}⚪ 中性{% endif %}</td>
+                    <td>{{ item.score }}</td>
+                    <td>{{ item.confidence }}</td>
+                    <td>{{ item.expectation }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="footer">
+        本报告由 AI 自动生成，仅限个人学习研究，不构成投资建议。<br>
+        生成时间：{{ generated_time }}
+    </div>
+</div>
+
+<script>
+    // 评分分布柱状图
+    var scoreChart = echarts.init(document.getElementById('scoreChart'));
+    scoreChart.setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        grid: { top: 20, bottom: 20, left: 40, right: 10, containLabel: true },
+        xAxis: { type: 'category', data: {{ score_labels|safe }}, axisLabel: { rotate: 0 } },
+        yAxis: { type: 'value', name: '新闻数量' },
+        series: [{
+            name: '新闻数', type: 'bar', data: {{ score_counts|safe }},
+            itemStyle: { borderRadius: [6,6,0,0], color: '#3b82f6' }
+        }]
+    });
+    
+    // 情绪占比饼图
+    var sentimentChart = echarts.init(document.getElementById('sentimentChart'));
+    sentimentChart.setOption({
+        tooltip: { trigger: 'item' },
+        legend: { top: 'bottom' },
+        series: [{
+            name: '情绪分布', type: 'pie', radius: '55%',
+            data: {{ sentiment_data|safe }},
+            label: { show: true, formatter: '{b}: {d}%' },
+            emphasis: { scale: true }
+        }]
+    });
+</script>
+</body>
+</html>
