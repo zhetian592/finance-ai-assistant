@@ -2,15 +2,12 @@ import requests
 import json
 import logging
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict
 import time
-import random
 
 logger = logging.getLogger(__name__)
 
 class NewsCrawler:
-    """稳定版：使用新浪 JSON 接口 + 网易备用"""
-    
     def fetch_sina_json(self, max_news=30) -> List[Dict]:
         url = "https://feed.sina.com.cn/news/roll/roll_info_1.xml?show=title&format=json"
         try:
@@ -39,7 +36,6 @@ class NewsCrawler:
             return []
 
     def fetch_163_json(self, max_news=20) -> List[Dict]:
-        """网易财经 JSON 接口（备用）"""
         url = "https://c.m.163.com/news/headline/T1467284926140.json"
         try:
             resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
@@ -51,7 +47,8 @@ class NewsCrawler:
             for item in items[:max_news]:
                 title = item.get('title', '').strip()
                 link = item.get('url', '')
-                time_str = datetime.fromtimestamp(item.get('ctime', 0)).strftime('%Y-%m-%d %H:%M')
+                ctime = item.get('ctime', 0)
+                time_str = datetime.fromtimestamp(ctime).strftime('%Y-%m-%d %H:%M') if ctime else ''
                 if title and link:
                     news.append({
                         'title': title,
@@ -70,7 +67,6 @@ class NewsCrawler:
         news = self.fetch_sina_json(max_news)
         if len(news) < max_news:
             news += self.fetch_163_json(max_news - len(news))
-        # 去重
         seen = set()
         unique = []
         for n in news:
@@ -81,15 +77,15 @@ class NewsCrawler:
 
 
 class FundDataCrawler:
-    """资金数据（降级处理：失败时返回空，不中断流程）"""
-    
     def fetch_north_flow(self) -> Dict:
         try:
             import akshare as ak
             df = ak.stock_hsgt_north_net_flow_in_em(symbol="北上")
             if df is not None and not df.empty:
                 latest = df.iloc[-1]
-                return {'date': latest['日期'], 'net_inflow': latest['净买入额']}
+                date_col = '日期' if '日期' in df.columns else 'date'
+                inflow_col = '净买入额' if '净买入额' in df.columns else 'net_inflow'
+                return {'date': latest[date_col], 'net_inflow': latest[inflow_col]}
         except Exception as e:
             logger.warning(f"北向资金获取失败（降级）: {e}")
         return {}
