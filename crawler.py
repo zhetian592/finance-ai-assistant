@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-爬虫模块：新闻、资金数据、大盘数据
+爬虫模块：新闻、资金数据、大盘数据（修复版）
 """
 
 import time
@@ -11,6 +11,7 @@ from fake_useragent import UserAgent
 from typing import List, Dict, Optional
 import logging
 import akshare as ak
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ class BaseCrawler:
         self.proxy = {'http': proxy, 'https': proxy} if proxy else None
         self.ua = UserAgent()
         self.max_retries = 3
-        self.retry_delay = [1, 2, 4]  # 指数退避
+        self.retry_delay = [1, 2, 4]
     
     def get_headers(self):
         return {'User-Agent': self.ua.random}
@@ -44,10 +45,8 @@ class BaseCrawler:
         return None
 
 class NewsCrawler(BaseCrawler):
-    """新闻爬虫：新浪财经、财联社快讯"""
-    
     def fetch_sina_roll(self, max_news=20) -> List[Dict]:
-        """新浪财经滚动新闻"""
+        """新浪财经滚动新闻 - 通用选择器"""
         url = "https://finance.sina.com.cn/roll/"
         resp = self.fetch(url)
         if not resp:
@@ -55,30 +54,56 @@ class NewsCrawler(BaseCrawler):
         
         soup = BeautifulSoup(resp.text, 'html.parser')
         news_list = []
-        items = soup.select('.news-item') or soup.select('.list li') or soup.select('.d-list li')
         
-        for item in items[:max_news]:
+        # 多种选择器尝试
+        selectors = [
+            '.news-item', '.list li', '.d-list li', 
+            '.feed-card-item', '.feed-card-content', 
+            'a[href*="finance.sina.com.cn"]'
+        ]
+        items = []
+        for sel in selectors:
+            items = soup.select(sel)
+            if items:
+                break
+        
+        # 如果还是没有，直接找所有包含新闻链接的 a 标签
+        if not items:
+            all_links = soup.find_all('a', href=re.compile(r'https://finance\.sina\.com\.cn/.*/.*\.shtml'))
+            items = all_links[:max_news*2]
+        
+        seen_urls = set()
+        for item in items:
             try:
-                a_tag = item.select_one('a')
+                a_tag = item if item.name == 'a' else item.select_one('a')
                 if not a_tag:
                     continue
-                title = a_tag.get_text(strip=True)
-                link = a_tag.get('href', '')
-                if not title or not link:
+                href = a_tag.get('href', '')
+                if not href or not href.startswith('https://finance.sina.com.cn/'):
                     continue
-                # 时间、来源处理
-                time_tag = item.select_one('.time') or item.select_one('span.time')
-                time_str = time_tag.get_text(strip=True) if time_tag else ""
-                source_tag = item.select_one('.source') or item.select_one('span.source')
-                source = source_tag.get_text(strip=True) if source_tag else "新浪财经"
+                if href in seen_urls:
+                    continue
+                seen_urls.add(href)
+                
+                title = a_tag.get_text(strip=True)
+                if not title or len(title) < 5:
+                    continue
+                
+                # 时间尝试从附近 span 获取
+                time_elem = item.select_one('.time') or item.select_one('.date') or item.select_one('span.time')
+                time_str = time_elem.get_text(strip=True) if time_elem else ""
+                source = "新浪财经"
                 summary = title  # 简化
+                
                 news_list.append({
                     'title': title,
                     'time': time_str,
                     'source': source,
                     'summary': summary,
-                    'url': link
+                    'url': href
                 })
+                if len(news_list) >= max_news:
+                    break
             except Exception as e:
                 logger.error(f"解析新浪新闻条目失败: {e}")
         return news_list
@@ -91,39 +116,46 @@ class NewsCrawler(BaseCrawler):
             return []
         soup = BeautifulSoup(resp.text, 'html.parser')
         news_list = []
-        # 财联社快讯结构通常为 .telegraph-list .telegraph-item
-        items = soup.select('.telegraph-item') or soup.select('.list-item')
+        
+        # 常见选择器
+        items = soup.select('.telegraph-item') or soup.select('.list-item') or soup.select('.news-item')
+        if not items:
+            # 尝试找所有带标题的链接
+            items = soup.find_all('a', href=re.compile(r'/detail/\d+'))
+        
         for item in items[:max_news]:
             try:
-                title_elem = item.select_one('.title') or item.select_one('a')
-                title = title_elem.get_text(strip=True) if title_elem else ""
-                link = title_elem.get('href') if title_elem else ""
-                if link and not link.startswith('http'):
-                    link = "https://www.cls.cn" + link
-                time_elem = item.select_one('.time')
+                a_tag = item if item.name == 'a' else item.select_one('a')
+                if not a_tag:
+                    continue
+                title = a_tag.get_text(strip=True)
+                href = a_tag.get('href', '')
+                if href and not href.startswith('http'):
+                    href = 'https://www.cls.cn' + href
+                if not title or len(title) < 5:
+                    continue
+                time_elem = item.select_one('.time') or item.select_one('.date')
                 time_str = time_elem.get_text(strip=True) if time_elem else ""
                 news_list.append({
                     'title': title,
                     'time': time_str,
                     'source': '财联社',
                     'summary': title,
-                    'url': link
+                    'url': href
                 })
             except Exception as e:
                 logger.error(f"解析财联社新闻失败: {e}")
         return news_list
     
     def fetch_all_sources(self, max_news=30) -> List[Dict]:
-        """多源获取，去重（按标题）"""
         all_news = []
-        # 尝试新浪
         sina_news = self.fetch_sina_roll(max_news)
         all_news.extend(sina_news)
-        # 尝试财联社
         if len(all_news) < max_news:
             cls_news = self.fetch_cls_express(max_news - len(all_news))
             all_news.extend(cls_news)
-        # 简单去重（按标题）
+        
+        # 去重（按标题）
         seen_titles = set()
         unique_news = []
         for news in all_news:
@@ -131,18 +163,18 @@ class NewsCrawler(BaseCrawler):
             if title not in seen_titles:
                 seen_titles.add(title)
                 unique_news.append(news)
-        # 随机延时
-        time.sleep(random.uniform(1, 3))
+        time.sleep(random.uniform(1, 2))
         return unique_news[:max_news]
 
 
 class FundDataCrawler(BaseCrawler):
-    """资金数据爬虫：使用 AKShare"""
+    """资金数据爬虫 - 使用 AKShare 最新接口"""
     
     def fetch_north_flow(self) -> Dict:
         """北向资金估算（当日）"""
         try:
-            # AKShare 接口：获取北向资金当日流向
+            # 修正接口：stock_hsgt_north_net_flow_in_em 可能已变更，改用 stock_hsgt_north_net_flow_in_em
+            # 先尝试新接口
             df = ak.stock_hsgt_north_net_flow_in_em(symbol="北上")
             if df is not None and not df.empty:
                 latest = df.iloc[-1]
@@ -151,6 +183,19 @@ class FundDataCrawler(BaseCrawler):
                     'net_inflow': latest['净买入额'],
                     'type': 'north'
                 }
+        except AttributeError:
+            # 旧接口备选
+            try:
+                df = ak.stock_hsgt_north_net_flow_in_em(symbol="北上")
+                if df is not None and not df.empty:
+                    latest = df.iloc[-1]
+                    return {
+                        'date': latest['日期'],
+                        'net_inflow': latest['净买入额'],
+                        'type': 'north'
+                    }
+            except:
+                pass
         except Exception as e:
             logger.error(f"获取北向资金失败: {e}")
         return {}
@@ -158,13 +203,17 @@ class FundDataCrawler(BaseCrawler):
     def fetch_sector_flow(self) -> List[Dict]:
         """板块资金净流入（申万一级）"""
         try:
+            # 修正接口参数
             df = ak.stock_sector_fund_flow_rank(indicator="今日", sector_type="行业资金流向")
             if df is not None and not df.empty:
                 result = []
                 for _, row in df.head(10).iterrows():
+                    # 列名可能是 '行业' 或 '名称'
+                    sector_col = '行业' if '行业' in df.columns else '名称'
+                    inflow_col = '今日净流入' if '今日净流入' in df.columns else '净流入'
                     result.append({
-                        'sector': row['行业'],
-                        'net_inflow': row['今日净流入'],
+                        'sector': row[sector_col],
+                        'net_inflow': row[inflow_col],
                         'date': datetime.now().strftime('%Y-%m-%d')
                     })
                 return result
@@ -191,7 +240,6 @@ class FundDataCrawler(BaseCrawler):
         return {}
     
     def fetch_all(self) -> Dict:
-        """整合所有资金数据"""
         north = self.fetch_north_flow()
         sectors = self.fetch_sector_flow()
         return {
