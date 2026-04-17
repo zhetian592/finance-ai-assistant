@@ -1,37 +1,27 @@
-# -*- coding: utf-8 -*-
-"""
-数据库模块：SQLite 操作（自动创建目录）
-"""
-
 import os
 import sqlite3
 import hashlib
-from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self, db_path='data/finance.db'):
-        # ✅ 关键修复：确保数据库文件所在目录存在
         db_dir = os.path.dirname(db_path)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
-            logger.info(f"创建目录: {db_dir}")
         self.db_path = db_path
         self.conn = None
-    
+
     def get_connection(self):
         if self.conn is None:
             self.conn = sqlite3.connect(self.db_path)
             self.conn.row_factory = sqlite3.Row
         return self.conn
-    
+
     def initialize(self):
-        """创建表结构"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS news_raw (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +34,6 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS news_analysis (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,7 +50,6 @@ class Database:
                 FOREIGN KEY (news_id) REFERENCES news_raw(id)
             )
         ''')
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS fund_flow (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +60,6 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS market_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,12 +71,11 @@ class Database:
                 volume INTEGER
             )
         ''')
-        
         conn.commit()
         logger.info("数据库初始化完成")
-    
+
     def insert_news(self, news: dict) -> int:
-        fingerprint = self._calc_fingerprint(news)
+        fingerprint = hashlib.md5(f"{news['title']}|{news['source']}|{news['time'][:16]}".encode()).hexdigest()
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
@@ -100,20 +86,15 @@ class Database:
             conn.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
-            logger.debug(f"新闻已存在: {news['title'][:30]}")
             return 0
-    
-    def _calc_fingerprint(self, news: dict) -> str:
-        base = f"{news['title']}|{news['source']}|{news['time'][:16] if news['time'] else ''}"
-        return hashlib.md5(base.encode()).hexdigest()
-    
+
     def insert_analysis(self, news_id: int, analysis: dict):
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO news_analysis 
-            (news_id, sentiment, affected_industries, beneficial_sectors, related_funds_stocks, score, confidence, expectation, raw_response)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (news_id, sentiment, affected_industries, beneficial_sectors, related_funds_stocks, score, confidence, expectation)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             news_id,
             analysis.get('sentiment'),
@@ -122,25 +103,22 @@ class Database:
             ','.join(analysis.get('related_funds_stocks', [])),
             analysis.get('score'),
             analysis.get('confidence'),
-            analysis.get('expectation'),
-            ''
+            analysis.get('expectation')
         ))
         conn.commit()
-    
+
     def insert_fund_flow(self, fund_data: dict):
         conn = self.get_connection()
         cursor = conn.cursor()
         north = fund_data.get('north_flow', {})
         if north:
-            cursor.execute('''
-                INSERT INTO fund_flow (date, type, value) VALUES (?, ?, ?)
-            ''', (north.get('date'), 'north', north.get('net_inflow', 0)))
-        for sector_flow in fund_data.get('sector_flows', []):
-            cursor.execute('''
-                INSERT INTO fund_flow (date, type, value, sector) VALUES (?, ?, ?, ?)
-            ''', (sector_flow.get('date'), 'sector', sector_flow.get('net_inflow', 0), sector_flow.get('sector')))
+            cursor.execute('INSERT INTO fund_flow (date, type, value) VALUES (?, ?, ?)',
+                           (north.get('date'), 'north', north.get('net_inflow', 0)))
+        for sec in fund_data.get('sector_flows', []):
+            cursor.execute('INSERT INTO fund_flow (date, type, value, sector) VALUES (?, ?, ?, ?)',
+                           (sec.get('date'), 'sector', sec.get('net_inflow', 0), sec.get('sector')))
         conn.commit()
-    
+
     def insert_market_data(self, market: dict):
         if not market:
             return
@@ -151,7 +129,7 @@ class Database:
             VALUES (?, ?, ?, ?, ?, ?)
         ''', (market.get('date'), market.get('open'), market.get('high'), market.get('low'), market.get('close'), market.get('volume')))
         conn.commit()
-    
+
     def get_latest_news(self, limit=50):
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -159,23 +137,21 @@ class Database:
             SELECT n.*, a.sentiment, a.score, a.confidence, a.expectation, a.affected_industries, a.beneficial_sectors
             FROM news_raw n
             LEFT JOIN news_analysis a ON n.id = a.news_id
-            ORDER BY n.created_at DESC
-            LIMIT ?
+            ORDER BY n.created_at DESC LIMIT ?
         ''', (limit,))
         return cursor.fetchall()
-    
+
     def get_latest_market(self):
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM market_data ORDER BY date DESC LIMIT 5')
         return cursor.fetchall()
-    
+
     def get_recent_fund_flow(self, days=5):
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
             SELECT date, type, value, sector FROM fund_flow
-            WHERE date >= date('now', ?)
-            ORDER BY date DESC
+            WHERE date >= date('now', ?) ORDER BY date DESC
         ''', (f'-{days} days',))
         return cursor.fetchall()
