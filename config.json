@@ -1,0 +1,16 @@
+{
+  "proxy": null,
+  "deepseek": {
+    "model": "deepseek-chat",
+    "temperature": 0.3
+  },
+  "signal": {
+    "min_score": 8,
+    "min_confidence": 0.7,
+    "allow_expectations": ["超预期", "部分预期"]
+  },
+  "report": {
+    "title": "财经AI决策报告",
+    "max_news": 30
+  }
+}
