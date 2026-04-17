@@ -1,0 +1,17 @@
+name: Debug Crawler
+
+on:
+  workflow_dispatch:   # 手动触发，不影响原有的定时任务
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run debug crawler
+        run: python debug_crawler.py
