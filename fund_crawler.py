@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# fund_crawler.py - 双模型稳定投票（OpenRouter + GitHub Models）
+# fund_crawler.py - 双模型投票 + 详细错误日志
 import os
 import json
 import re
@@ -9,43 +9,32 @@ import logging
 import sys
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Optional
 
 import requests
 import feedparser
 from bs4 import BeautifulSoup
 
-# ================= 日志配置 =================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+# 日志配置
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ================= 配置 =================
+# 读取环境变量
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-GH_MODELS_TOKEN = os.environ.get("GH_MODELS_TOKEN") or os.environ.get("GITHUB_TOKEN")
+GH_MODELS_TOKEN = os.environ.get("GH_MODELS_TOKEN")
+
+logger.info(f"OPENROUTER_API_KEY 是否设置: {bool(OPENROUTER_API_KEY)}")
+logger.info(f"GH_MODELS_TOKEN 是否设置: {bool(GH_MODELS_TOKEN)}")
 
 if not OPENROUTER_API_KEY:
     logger.error("请设置环境变量 OPENROUTER_API_KEY")
     sys.exit(1)
-if not GH_MODELS_TOKEN:
-    logger.warning("未设置 GH_MODELS_TOKEN，GitHub Models 将不可用")
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 GITHUB_MODELS_BASE_URL = "https://models.inference.ai.azure.com"
+REQUEST_TIMEOUT = 45
+MAX_RETRIES = 2
 
-# 稳定模型列表
-MODELS = [
-    ("openrouter", "openrouter/free"),           # OpenRouter 自动路由
-    ("github", "gpt-4o-mini"),                  # GitHub Models (需 GH_MODELS_TOKEN)
-]
-
-MAX_WORKERS = 2
-REQUEST_TIMEOUT = 30
-
-# 官方财经 RSS 源（稳定）
 RSS_FEEDS = [
     "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
     "https://feeds.bloomberg.com/markets/news.rss",
@@ -53,11 +42,9 @@ RSS_FEEDS = [
     "https://www.wsj.com/xml/rss/3_7085.xml",
 ]
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-]
+USER_AGENTS = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"]
 
-# ================= 辅助函数 =================
+# ---------- 抓取 RSS ----------
 def clean_html(text: str) -> str:
     if not text:
         return ""
@@ -109,7 +96,6 @@ def fetch_rss_feed(url: str) -> List[Dict]:
                 "title": title,
                 "link": link,
                 "summary": summary[:500],
-                "published": published,
                 "source": url
             })
         return items
@@ -141,11 +127,11 @@ def load_holdings() -> Dict:
         logger.error(f"读取 holdings.json 失败: {e}")
         return {"holdings": [], "cash": 0}
 
-# ================= AI 模型调用 =================
-def call_openrouter_model(model: str, prompt: str) -> Tuple[str, Optional[str]]:
-    for attempt in range(2):
+# ---------- AI 模型调用 ----------
+def call_openrouter(prompt: str) -> Optional[str]:
+    for attempt in range(MAX_RETRIES):
         try:
-            response = requests.post(
+            resp = requests.post(
                 f"{OPENROUTER_BASE_URL}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -154,214 +140,157 @@ def call_openrouter_model(model: str, prompt: str) -> Tuple[str, Optional[str]]:
                     "X-Title": "Fund Recommender"
                 },
                 json={
-                    "model": model,
+                    "model": "openrouter/free",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
                     "max_tokens": 2000,
                 },
                 timeout=REQUEST_TIMEOUT
             )
-            if response.status_code == 200:
-                return (model, response.json()["choices"][0]["message"]["content"])
+            if resp.status_code == 200:
+                return resp.json()["choices"][0]["message"]["content"]
             else:
-                logger.warning(f"OpenRouter 模型 {model} 返回 {response.status_code} (尝试 {attempt+1}/2)")
-                if attempt == 0:
-                    time.sleep(2)
+                logger.warning(f"OpenRouter 尝试 {attempt+1}: HTTP {resp.status_code}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(3)
         except Exception as e:
-            logger.warning(f"OpenRouter 模型 {model} 调用异常 (尝试 {attempt+1}/2): {e}")
-            if attempt == 0:
-                time.sleep(2)
-    return (model, None)
+            logger.warning(f"OpenRouter 异常 (尝试 {attempt+1}): {e}")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(3)
+    return None
 
-def call_github_model(model: str, prompt: str) -> Tuple[str, Optional[str]]:
+def call_github_model(prompt: str) -> Optional[str]:
     if not GH_MODELS_TOKEN:
-        return (model, None)
-    for attempt in range(2):
+        logger.warning("GH_MODELS_TOKEN 未设置，跳过 GitHub Models")
+        return None
+    for attempt in range(MAX_RETRIES):
         try:
-            response = requests.post(
+            resp = requests.post(
                 f"{GITHUB_MODELS_BASE_URL}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {GH_MODELS_TOKEN}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": model,
+                    "model": "gpt-4o-mini",
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
                     "max_tokens": 2000,
                 },
                 timeout=REQUEST_TIMEOUT
             )
-            if response.status_code == 200:
-                return (model, response.json()["choices"][0]["message"]["content"])
+            if resp.status_code == 200:
+                return resp.json()["choices"][0]["message"]["content"]
             else:
-                logger.warning(f"GitHub 模型 {model} 返回 {response.status_code} (尝试 {attempt+1}/2)")
-                if attempt == 0:
-                    time.sleep(2)
+                logger.warning(f"GitHub Models 尝试 {attempt+1}: HTTP {resp.status_code}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(3)
         except Exception as e:
-            logger.warning(f"GitHub 模型 {model} 调用异常 (尝试 {attempt+1}/2): {e}")
-            if attempt == 0:
-                time.sleep(2)
-    return (model, None)
+            logger.warning(f"GitHub Models 异常 (尝试 {attempt+1}): {e}")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(3)
+    return None
 
-def multi_model_vote(prompt: str) -> Dict[str, Any]:
-    logger.info(f"开始多模型投票，模型列表: {MODELS}")
+def parse_json_output(content: str) -> List[Dict]:
+    try:
+        json_match = re.search(r'\[\s*\{.*?\}\s*\]', content, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group(0))
+        else:
+            return []
+    except Exception as e:
+        logger.warning(f"JSON 解析失败: {e}")
+        return []
+
+# ---------- 投票聚合 ----------
+def multi_model_vote(prompt: str) -> Dict:
+    logger.info("开始多模型投票...")
     results = {}
-    with ThreadPoolExecutor(max_workers=len(MODELS)) as executor:
-        future_to_model = {}
-        for provider, model in MODELS:
-            if provider == "openrouter":
-                future = executor.submit(call_openrouter_model, model, prompt)
-            else:
-                future = executor.submit(call_github_model, model, prompt)
-            future_to_model[future] = f"{provider}:{model}"
-        for future in as_completed(future_to_model):
-            model_name, content = future.result()
-            results[model_name] = content
-            if content:
-                logger.info(f"模型 {model_name} 返回成功")
-            else:
-                logger.warning(f"模型 {model_name} 返回失败")
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_open = executor.submit(call_openrouter, prompt)
+        future_github = executor.submit(call_github_model, prompt)
+        results["openrouter"] = future_open.result()
+        results["github"] = future_github.result()
 
-    # 解析投票
     fund_votes = {}
     for model_name, content in results.items():
         if not content:
             continue
-        try:
-            json_match = re.search(r'\[\s*\{.*?\}\s*\]', content, re.DOTALL)
-            if not json_match:
-                logger.warning(f"模型 {model_name} 输出中未找到 JSON 数组")
-                continue
-            suggestions = json.loads(json_match.group(0))
-        except Exception as e:
-            logger.warning(f"解析模型 {model_name} 输出失败: {e}")
-            continue
-
+        suggestions = parse_json_output(content)
         for sug in suggestions:
-            code = sug.get("fund_code", "")
+            code = sug.get("fund_code")
             op = sug.get("recommendation", "").lower()
-            if not code or op not in ["buy", "sell", "hold", "adjust"]:
+            if not code or op not in ["buy","sell","hold","adjust"]:
                 continue
             if code not in fund_votes:
-                fund_votes[code] = {"buy": 0, "sell": 0, "hold": 0, "adjust": 0, "reasons": []}
+                fund_votes[code] = {"buy":0,"sell":0,"hold":0,"adjust":0,"reasons":[]}
             fund_votes[code][op] += 1
             fund_votes[code]["reasons"].append({
                 "model": model_name,
-                "reason": sug.get("reason", ""),
-                "amount": sug.get("suggested_amount", 0)
+                "reason": sug.get("reason",""),
+                "amount": sug.get("suggested_amount",0)
             })
 
-    final_recommendations = []
+    final = []
     for code, votes in fund_votes.items():
         max_op = max(votes, key=lambda k: votes[k] if k in ["buy","sell","hold","adjust"] else -1)
-        final_recommendations.append({
+        final.append({
             "fund_code": code,
             "recommendation": max_op,
             "votes": {k: votes[k] for k in ["buy","sell","hold","adjust"]},
-            "sample_reasons": votes["reasons"][:3]
+            "sample_reasons": votes["reasons"][:2]
         })
-    return {
-        "final_recommendations": final_recommendations,
-        "models_participated": len([c for c in results.values() if c is not None])
-    }
+    return {"final_recommendations": final, "models_participated": sum(1 for v in results.values() if v)}
 
-# ================= 报告生成 =================
-def generate_html_report(aggregated: Dict, holdings: Dict, news_count: int) -> str:
+# ---------- 报告生成 ----------
+def generate_html_report(aggregated: Dict, news_count: int) -> str:
     rows = ""
     for rec in aggregated["final_recommendations"]:
-        op_cn = {"buy":"买入", "sell":"卖出", "hold":"持有", "adjust":"调仓"}.get(rec["recommendation"], rec["recommendation"])
-        votes_str = f"买:{rec['votes']['buy']} 卖:{rec['votes']['sell']} 持:{rec['votes']['hold']} 调:{rec['votes']['adjust']}"
-        reason_sample = rec["sample_reasons"][0]["reason"] if rec["sample_reasons"] else "无"
-        rows += f"""
-        <tr>
-            <td>{rec['fund_code']}</td>
-            <td>{op_cn}</td>
-            <td>{votes_str}</td>
-            <td>{reason_sample}</td>
-        </tr>
-        """
+        op_cn = {"buy":"买入","sell":"卖出","hold":"持有","adjust":"调仓"}.get(rec["recommendation"], rec["recommendation"])
+        reason = rec["sample_reasons"][0]["reason"] if rec["sample_reasons"] else "无"
+        rows += f"<tr><td>{rec['fund_code']}</td><td>{op_cn}</td><td>{reason}</td></tr>"
     html = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>基金推荐报告</title>
-<style>
-    body {{ font-family: Arial, sans-serif; margin: 20px; }}
-    table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
-    th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-    th {{ background-color: #f2f2f2; }}
-    .footer {{ margin-top: 30px; font-size: 12px; color: #666; }}
-</style>
+<html><head><meta charset="UTF-8"><title>基金推荐报告</title>
+<style>body{{font-family:Arial;margin:20px}} table{{border-collapse:collapse;width:100%}} th,td{{border:1px solid #ddd;padding:8px}} th{{background:#f2f2f2}}</style>
 </head>
 <body>
 <h1>📈 基金推荐报告</h1>
 <p>生成时间：{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
-<p>参与投票模型数：{aggregated['models_participated']}</p>
-<p>抓取财经资讯条数：{news_count}</p>
-<h2>持仓分析建议</h2>
-<table>
-    <thead><tr><th>基金代码</th><th>推荐操作</th><th>投票分布</th><th>示例理由</th></tr></thead>
-    <tbody>{rows}</tbody>
-</table>
-<div class="footer">
-    <p>注：本报告由多AI模型投票生成，仅供参考，不构成投资建议。</p>
-</div>
-</body>
-</html>"""
+<p>参与模型数：{aggregated['models_participated']}</p>
+<p>抓取资讯数：{news_count}</p>
+<table><thead><tr><th>基金代码</th><th>操作</th><th>理由</th></tr></thead><tbody>{rows}</tbody></table>
+<p>注：仅供参考，不构成投资建议。</p>
+</body></html>"""
     return html
 
-def save_report(html_content: str):
+def save_report(content: str):
     with open("fund_report.html", "w", encoding="utf-8") as f:
-        f.write(html_content)
-    logger.info("报告已保存: fund_report.html")
+        f.write(content)
+    logger.info("报告已保存")
 
-# ================= 主流程 =================
 def main():
-    # 1. 抓取财经资讯
-    news_articles = fetch_all_news()
-    if not news_articles:
-        logger.warning("未抓取到任何财经资讯")
-        news_summary = "无近期市场资讯。"
-    else:
-        news_summary = "\n".join([f"- {a['title']} ({a['source']})" for a in news_articles[:50]])
-
-    # 2. 读取持仓
+    news = fetch_all_news()
+    news_summary = "\n".join([f"- {a['title']} ({a['source']})" for a in news[:50]]) if news else "无资讯"
     holdings = load_holdings()
     holdings_text = json.dumps(holdings, ensure_ascii=False, indent=2)
 
-    # 3. 构建提示词
-    prompt = f"""你是一名专业的投资顾问。根据以下市场资讯和用户持仓，对**每只基金**分别给出操作建议。
+    prompt = f"""你是一名投资顾问。根据资讯和持仓，对每只基金给出操作建议（buy/sell/hold/adjust）。
 
-**用户持仓**：
+持仓：
 {holdings_text}
 
-**近期市场资讯摘要**：
+资讯：
 {news_summary}
 
-**输出要求**：
-请严格按照以下 JSON 格式输出，必须包含所有基金，不要遗漏：
-[
-  {{
-    "fund_code": "基金代码",
-    "fund_name": "基金名称",
-    "recommendation": "buy/sell/hold/adjust",
-    "suggested_amount": 数字（买入或调仓时的建议金额）,
-    "reason": "决策理由（不超过30字）"
-  }}
-]
+输出JSON数组，每个元素包含：fund_code, recommendation, suggested_amount, reason（30字内）。
+示例：[{{"fund_code":"000001","recommendation":"hold","suggested_amount":0,"reason":"市场震荡"}}]
 
-请分析："""
+请输出："""
 
-    # 4. 多模型投票
     aggregated = multi_model_vote(prompt)
-
-    # 5. 生成并保存报告
-    html = generate_html_report(aggregated, holdings, len(news_articles))
+    html = generate_html_report(aggregated, len(news))
     save_report(html)
-
-    # 6. 输出摘要到日志
-    logger.info("=== 投票结果摘要 ===")
-    for rec in aggregated["final_recommendations"]:
-        logger.info(f"{rec['fund_code']} -> {rec['recommendation']} (买:{rec['votes']['buy']} 卖:{rec['votes']['sell']} 持:{rec['votes']['hold']})")
+    logger.info("完成")
 
 if __name__ == "__main__":
     main()
