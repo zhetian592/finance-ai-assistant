@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# fund_crawler.py - 财经RSS抓取 + 多模型投票基金推荐
+# fund_crawler.py - 财经RSS抓取（支持健康实例检测）+ 多模型投票
 import os
 import json
 import re
@@ -26,16 +26,14 @@ logger = logging.getLogger(__name__)
 # ================= 配置 =================
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-# 多模型投票列表（免费模型）
 MODELS = [
-    "openrouter/free",                 # 自动路由到可用免费模型
-    "qwen/qwen-7b-chat:free",          # 阿里通义千问
-    "deepseek/deepseek-chat:free",     # DeepSeek
-    "google/gemini-2.0-flash-exp:free",# Gemini
+    "openrouter/free",
+    "qwen/qwen-7b-chat:free",
+    "deepseek/deepseek-chat:free",
+    "google/gemini-2.0-flash-exp:free",
     "microsoft/phi-3-medium-128k-instruct:free"
 ]
 
-# 请求配置
 MAX_WORKERS = 5
 REQUEST_TIMEOUT = 15
 USER_AGENTS = [
@@ -43,16 +41,55 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
 ]
 
+# RSSHub 备用实例列表
+RSSHUB_INSTANCES = [
+    "https://rsshub.app",
+    "https://rsshub.ktachibana.party",
+    "https://rsshub.feeded.xyz",
+    "https://rsshub.bili.xyz"
+]
+
+# 备用财经 RSS 源（官方或更稳定的）
+FALLBACK_FEEDS = [
+    "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+    "https://feeds.bloomberg.com/markets/news.rss",
+    "https://www.ft.com/?format=rss",
+    "https://www.wsj.com/xml/rss/3_7085.xml",
+    "https://feeds.feedburner.com/caixin/china",
+]
+
 # ================= 加载配置 =================
 def load_sources() -> List[str]:
-    with open("fund_sources.json", "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open("fund_sources.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        # 如果文件不存在或出错，使用默认源
+        return FALLBACK_FEEDS
 
 def load_holdings() -> Dict:
     with open("holdings.json", "r", encoding="utf-8") as f:
         return json.load(f)
 
 RAW_SOURCES = load_sources()
+
+# ================= 健康 RSSHub 实例检测 =================
+def test_rsshub_instance(instance: str) -> bool:
+    try:
+        url = f"{instance}/rsshub/status"
+        resp = requests.get(url, timeout=10)
+        return resp.status_code == 200
+    except:
+        return False
+
+def get_healthy_rsshub() -> str:
+    """随机选择一个健康的 RSSHub 实例"""
+    random.shuffle(RSSHUB_INSTANCES)
+    for inst in RSSHUB_INSTANCES:
+        if test_rsshub_instance(inst):
+            return inst
+    # 全部失败则返回第一个
+    return RSSHUB_INSTANCES[0]
 
 # ================= RSS 抓取 =================
 def clean_html(text: str) -> str:
@@ -80,7 +117,10 @@ def parse_published(published_str: str) -> Optional[datetime]:
             continue
     return None
 
-def fetch_rss(url: str) -> List[Dict]:
+def fetch_rss(url: str, rsshub_instance: str) -> List[Dict]:
+    """抓取单个 RSS 源，如果是 RSSHub 路由则替换实例"""
+    if "rsshub.app" in url:
+        url = url.replace("https://rsshub.app", rsshub_instance)
     try:
         headers = {"User-Agent": random.choice(USER_AGENTS)}
         resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
@@ -89,7 +129,7 @@ def fetch_rss(url: str) -> List[Dict]:
             return []
         feed = feedparser.parse(resp.content)
         items = []
-        cutoff = datetime.utcnow() - timedelta(hours=48)  # 抓取最近48小时
+        cutoff = datetime.utcnow() - timedelta(hours=48)
         for entry in feed.entries[:20]:
             published = entry.get("published", entry.get("updated", ""))
             pub_dt = parse_published(published)
@@ -114,9 +154,11 @@ def fetch_rss(url: str) -> List[Dict]:
 
 def fetch_all_sources() -> List[Dict]:
     logger.info(f"开始抓取 {len(RAW_SOURCES)} 个财经信源")
+    rsshub_instance = get_healthy_rsshub()
+    logger.info(f"使用 RSSHub 实例: {rsshub_instance}")
     all_items = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_url = {executor.submit(fetch_rss, url): url for url in RAW_SOURCES}
+        future_to_url = {executor.submit(fetch_rss, url, rsshub_instance): url for url in RAW_SOURCES}
         for future in as_completed(future_to_url):
             url = future_to_url[future]
             try:
@@ -130,7 +172,6 @@ def fetch_all_sources() -> List[Dict]:
 
 # ================= 多模型投票 =================
 def call_model(model: str, prompt: str) -> Tuple[str, Optional[str]]:
-    """调用单个模型，返回 (model_name, response_text)"""
     try:
         response = requests.post(
             f"{OPENROUTER_BASE_URL}/chat/completions",
@@ -159,7 +200,6 @@ def call_model(model: str, prompt: str) -> Tuple[str, Optional[str]]:
         return (model, None)
 
 def multi_model_vote(prompt: str, models: List[str]) -> Dict[str, Any]:
-    """并发调用多个模型，返回投票结果"""
     logger.info(f"开始多模型投票，共 {len(models)} 个模型")
     results = {}
     with ThreadPoolExecutor(max_workers=len(models)) as executor:
@@ -170,23 +210,17 @@ def multi_model_vote(prompt: str, models: List[str]) -> Dict[str, Any]:
     return results
 
 def parse_model_output(content: str) -> List[Dict]:
-    """解析模型返回的 JSON 格式建议"""
     try:
-        # 提取 JSON 部分
         json_match = re.search(r'\[\s*\{.*?\}\s*\]', content, re.DOTALL)
         if json_match:
-            data = json.loads(json_match.group(0))
-            return data
-        else:
-            return []
+            return json.loads(json_match.group(0))
+        return []
     except Exception as e:
         logger.warning(f"解析模型输出失败: {e}")
         return []
 
 def aggregate_votes(all_results: Dict[str, Optional[str]]) -> Dict[str, Any]:
-    """聚合投票结果，统计每只基金的操作建议"""
-    # 统计每只基金的推荐操作
-    fund_votes = {}  # {fund_code: {"buy":0, "sell":0, "hold":0, "adjust":0}}
+    fund_votes = {}
     all_suggestions = []
     for model, content in all_results.items():
         if not content:
@@ -206,7 +240,6 @@ def aggregate_votes(all_results: Dict[str, Optional[str]]) -> Dict[str, Any]:
                 "amount": sug.get("suggested_amount", 0)
             })
             all_suggestions.append(sug)
-    # 计算每个基金的最终推荐（投票最多的操作）
     final_recommendations = []
     for code, votes in fund_votes.items():
         max_op = max(votes, key=lambda k: votes[k] if k in ["buy","sell","hold","adjust"] else -1)
@@ -222,9 +255,7 @@ def aggregate_votes(all_results: Dict[str, Optional[str]]) -> Dict[str, Any]:
         "models_participated": len([c for c in all_results.values() if c is not None])
     }
 
-# ================= 报告生成 =================
 def generate_html_report(aggregated: Dict, holdings: Dict, news_count: int) -> str:
-    """生成 HTML 格式的基金推荐报告"""
     rows = ""
     for rec in aggregated["final_recommendations"]:
         op_cn = {"buy":"买入", "sell":"卖出", "hold":"持有", "adjust":"调仓"}.get(rec["recommendation"], rec["recommendation"])
@@ -266,32 +297,27 @@ def generate_html_report(aggregated: Dict, holdings: Dict, news_count: int) -> s
 </html>"""
     return html
 
-def save_report(html_content: str, md_content: str = None):
+def save_report(html_content: str):
     with open("fund_report.html", "w", encoding="utf-8") as f:
         f.write(html_content)
-    if md_content:
-        with open("fund_report.md", "w", encoding="utf-8") as f:
-            f.write(md_content)
     logger.info("报告已保存: fund_report.html")
 
-# ================= 主流程 =================
 def main():
     if not OPENROUTER_API_KEY:
         logger.error("请设置环境变量 OPENROUTER_API_KEY")
         return
 
-    # 1. 抓取财经资讯
     articles = fetch_all_sources()
     if not articles:
-        logger.warning("未抓取到任何财经资讯")
-        return
+        logger.warning("未抓取到任何财经资讯，将使用历史数据或跳过分析")
+        # 仍然尝试分析，但提示无数据
+        news_summary = "无近期市场资讯。"
+    else:
+        news_summary = "\n".join([f"- {a['title']} ({a['source']})" for a in articles[:50]])
 
-    # 2. 读取持仓
     holdings = load_holdings()
     holdings_text = json.dumps(holdings, ensure_ascii=False, indent=2)
 
-    # 3. 构造提示词
-    news_summary = "\n".join([f"- {a['title']} ({a['source']})" for a in articles[:50]])  # 限制条数
     prompt = f"""你是一名专业的投资顾问。根据以下市场资讯和用户持仓，对每只基金给出操作建议。
 
 **用户持仓**：
@@ -307,22 +333,18 @@ def main():
     "fund_code": "基金代码",
     "fund_name": "基金名称",
     "recommendation": "buy/sell/hold/adjust",
-    "suggested_amount": 数字（买入或调仓时填写）,
+    "suggested_amount": 数字,
     "reason": "决策理由（不超过30字）"
   }}
 ]
 
 请分析："""
 
-    # 4. 多模型投票
     results = multi_model_vote(prompt, MODELS)
     aggregated = aggregate_votes(results)
-
-    # 5. 生成报告
     html = generate_html_report(aggregated, holdings, len(articles))
     save_report(html)
 
-    # 6. 打印摘要
     logger.info("=== 投票结果摘要 ===")
     for rec in aggregated["final_recommendations"]:
         logger.info(f"{rec['fund_code']} -> {rec['recommendation']} (买:{rec['votes']['buy']} 卖:{rec['votes']['sell']} 持:{rec['votes']['hold']})")
