@@ -1,0 +1,27 @@
+name: Backtest
+
+on:
+  schedule:
+    - cron: '0 1 * * 1'  # 每周一 UTC 1:00 运行
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install akshare pandas numpy
+      - name: Run backtest
+        run: python -c "from backtest import calculate_performance; print(calculate_performance())"
+      - name: Commit backtest results
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto update backtest results"
+          file_pattern: "backtest/performance.json"
