@@ -1,5 +1,0 @@
-{
-  "proxy": null,
-  "deepseek": {"model": "deepseek-chat", "temperature": 0.3},
-  "signal": {"min_score": 8, "min_confidence": 0.7}
-}
