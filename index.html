@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📈 基金AI决策助手</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f7fa;
+            color: #1e2a3a;
+        }
+        .container {
+            max-width: 1300px;
+            margin: 0 auto;
+        }
+        h1, h2, h3 { color: #0a4b6e; }
+        .card {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            padding: 20px 24px;
+            margin-bottom: 24px;
+            border: 1px solid #e0e0e0;
+        }
+        .flex-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: space-between;
+            align-items: center;
+        }
+        button {
+            background: #0a4b6e;
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 30px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: 0.2s;
+        }
+        button:hover {
+            background: #0d5e8a;
+        }
+        .btn-secondary {
+            background: #6c757d;
+        }
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        .btn-danger {
+            background: #dc3545;
+        }
+        .btn-danger:hover {
+            background: #b02a37;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background-color: #f0f4f8;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 8px;
+            margin: 6px 0;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-family: monospace;
+        }
+        .holdings-editor {
+            background: #f8f9fc;
+            padding: 15px;
+            border-radius: 12px;
+        }
+        .holdings-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        .holdings-row input {
+            flex: 1;
+            min-width: 120px;
+        }
+        .preview-json {
+            background: #1e2a3a;
+            color: #e0e0e0;
+            padding: 12px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 13px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .status.info { background: #d1ecf1; color: #0c5460; }
+        iframe {
+            width: 100%;
+            border: none;
+            border-radius: 12px;
+            background: white;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #6c757d;
+            font-size: 0.8rem;
+        }
+        @media (max-width: 700px) {
+            body { padding: 12px; }
+            .card { padding: 16px; }
+            .holdings-row { flex-direction: column; align-items: stretch; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="card">
+        <div class="flex-row">
+            <h1>📈 基金AI决策助手</h1>
+            <div>
+                <button id="refreshReportBtn">🔄 刷新报告</button>
+                <button id="triggerAnalysisBtn" class="btn-secondary" style="margin-left: 10px;">🚀 立即分析</button>
+            </div>
+        </div>
+        <p>基于多AI模型（通义千问、DeepSeek、Gemini等）投票分析，结合您的持仓和市场资讯，生成基金操作建议。</p>
+    </div>
+
+    <!-- 最新报告展示 -->
+    <div class="card">
+        <h2>📄 最新基金推荐报告</h2>
+        <div id="reportFrameContainer" style="min-height: 300px;">
+            <div class="loader" style="text-align:center; padding:40px;">加载中...</div>
+        </div>
+    </div>
+
+    <!-- 持仓管理 -->
+    <div class="card">
+        <h2>📊 持仓管理</h2>
+        <p>修改下方表格中的持仓数据，点击「生成 holdings.json」后手动替换仓库中的 <code>holdings.json</code> 文件。</p>
+        <div id="holdings-editor" class="holdings-editor">
+            <!-- 动态生成持仓表单 -->
+        </div>
+        <div style="margin-top: 15px;">
+            <button id="addHoldingBtn">➕ 添加基金</button>
+            <button id="generateJsonBtn" style="margin-left: 10px;">📋 生成 holdings.json</button>
+            <button id="resetHoldingsBtn" class="btn-secondary" style="margin-left: 10px;">🔄 重置为示例</button>
+        </div>
+        <div id="jsonPreview" style="margin-top: 15px; display: none;">
+            <h3>预览 / 复制以下内容到 holdings.json</h3>
+            <div class="preview-json" id="jsonPreviewContent"></div>
+            <button id="copyJsonBtn" class="btn-secondary" style="margin-top: 8px;">📋 复制到剪贴板</button>
+        </div>
+    </div>
+
+    <!-- 历史报告 -->
+    <div class="card">
+        <h2>📚 历史报告</h2>
+        <div id="historyList">
+            <p>加载中...</p>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>⚡ 分析通过 GitHub Actions 执行，结果自动生成。持仓修改后请手动替换仓库中的 holdings.json 文件。</p>
+    </div>
+</div>
+
+<script>
+    // ---------- 全局变量 ----------
+    let currentHoldings = { holdings: [], cash: 50000 };
+    const REPO_OWNER = "zhetian592";
+    const REPO_NAME = "finance-ai-assistant";
+    const WORKFLOW_ID = "fund.yml";  // 工作流文件名
+    const GITHUB_TOKEN_KEY = "github_pat";
+
+    // ---------- 工具函数 ----------
+    async function fetchWithTimeout(url, options, timeout = 10000) {
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), timeout);
+        try {
+            const response = await fetch(url, { ...options, signal: controller.signal });
+            clearTimeout(id);
+            return response;
+        } catch (error) {
+            clearTimeout(id);
+            throw error;
+        }
+    }
+
+    // 加载最新报告 (iframe)
+    async function loadLatestReport() {
+        const container = document.getElementById("reportFrameContainer");
+        container.innerHTML = '<div class="loader" style="text-align:center; padding:40px;">加载中...</div>';
+        try {
+            // 尝试获取 fund_report.html 是否存在
+            const response = await fetch(`https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/fund_report.html`);
+            if (response.ok) {
+                const html = await response.text();
+                // 直接渲染 html 内容（避免 iframe 高度问题）
+                container.innerHTML = `<div style="border:1px solid #ddd; border-radius:12px; overflow:auto; padding:0;">${html}</div>`;
+            } else {
+                container.innerHTML = `<div class="status info">暂无最新报告，请点击「立即分析」生成。</div>`;
+            }
+        } catch (err) {
+            container.innerHTML = `<div class="status error">加载失败：${err.message}</div>`;
+        }
+    }
+
+    // 加载历史报告列表
+    async function loadHistoryList() {
+        const listDiv = document.getElementById("historyList");
+        listDiv.innerHTML = "<p>加载中...</p>";
+        try {
+            // 使用 GitHub API 获取 reports 目录下的文件（如果有）
+            const apiUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/`;
+            const response = await fetch(apiUrl);
+            if (response.ok) {
+                const files = await response.json();
+                const reportFiles = files.filter(f => f.name.startsWith("fund_report_") && f.name.endsWith(".html"));
+                if (reportFiles.length === 0) {
+                    listDiv.innerHTML = "<p>暂无历史报告。</p>";
+                } else {
+                    let html = '<ul style="list-style: none; padding-left: 0;">';
+                    reportFiles.sort((a,b) => b.name.localeCompare(a.name)).forEach(file => {
+                        const dateStr = file.name.replace("fund_report_", "").replace(".html", "");
+                        const display = dateStr.slice(0,4)+"-"+dateStr.slice(4,6)+"-"+dateStr.slice(6,8)+" "+dateStr.slice(9,11)+":"+dateStr.slice(11,13)+":"+dateStr.slice(13,15);
+                        html += `<li><a href="${file.download_url}" target="_blank">${display} UTC</a></li>`;
+                    });
+                    html += '</ul>';
+                    listDiv.innerHTML = html;
+                }
+            } else {
+                // 如果没有 reports 目录，尝试列出根目录的 fund_report.html
+                listDiv.innerHTML = '<p>暂无历史报告归档（可手动保存历史版本）。</p>';
+            }
+        } catch (err) {
+            listDiv.innerHTML = `<p class="status error">加载历史失败：${err.message}</p>`;
+        }
+    }
+
+    // 渲染持仓表单
+    function renderHoldingsForm() {
+        const editor = document.getElementById("holdings-editor");
+        let html = `<div style="margin-bottom:10px;"><label>可投资现金 (元):</label><input type="number" id="cashInput" value="${currentHoldings.cash}" step="1000"></div>`;
+        html += `<table id="holdingsTable">
+            <thead><tr><th>基金代码</th><th>基金名称</th><th>持有金额(元)</th><th>成本净值</th><th></th></tr></thead>
+            <tbody>`;
+        currentHoldings.holdings.forEach((h, idx) => {
+            html += `<tr data-idx="${idx}">
+                <td><input type="text" class="code" value="${h.fund_code}" placeholder="代码"></td>
+                <td><input type="text" class="name" value="${h.fund_name}" placeholder="名称"></td>
+                <td><input type="number" class="amount" value="${h.amount}" step="1000"></td>
+                <td><input type="number" class="cost" value="${h.cost}" step="0.01"></td>
+                <td><button class="removeRow" data-idx="${idx}">❌</button></td>
+            </tr>`;
+        });
+        html += `</tbody></table>`;
+        editor.innerHTML = html;
+        // 绑定删除事件
+        document.querySelectorAll('.removeRow').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const idx = parseInt(btn.getAttribute('data-idx'));
+                currentHoldings.holdings.splice(idx, 1);
+                renderHoldingsForm();
+            });
+        });
+    }
+
+    // 从表单收集持仓数据
+    function collectHoldingsFromForm() {
+        const cash = parseFloat(document.getElementById("cashInput").value) || 0;
+        const holdings = [];
+        const rows = document.querySelectorAll("#holdingsTable tbody tr");
+        rows.forEach(row => {
+            const code = row.querySelector('.code').value.trim();
+            const name = row.querySelector('.name').value.trim();
+            const amount = parseFloat(row.querySelector('.amount').value) || 0;
+            const cost = parseFloat(row.querySelector('.cost').value) || 0;
+            if (code && name) {
+                holdings.push({ fund_code: code, fund_name: name, amount, cost });
+            }
+        });
+        return { holdings, cash };
+    }
+
+    // 生成 JSON 并显示
+    function showJsonPreview() {
+        const data = collectHoldingsFromForm();
+        const jsonStr = JSON.stringify(data, null, 2);
+        document.getElementById("jsonPreviewContent").innerText = jsonStr;
+        document.getElementById("jsonPreview").style.display = "block";
+    }
+
+    // 复制到剪贴板
+    function copyJsonToClipboard() {
+        const text = document.getElementById("jsonPreviewContent").innerText;
+        navigator.clipboard.writeText(text).then(() => {
+            alert("已复制 holdings.json 内容到剪贴板，请手动替换仓库中的文件。");
+        }).catch(() => {
+            alert("复制失败，请手动复制。");
+        });
+    }
+
+    // 重置为示例持仓
+    function resetHoldings() {
+        currentHoldings = {
+            holdings: [
+                { fund_code: "000001", fund_name: "华夏成长混合", amount: 10000, cost: 1.25 },
+                { fund_code: "110022", fund_name: "易方达消费行业", amount: 20000, cost: 3.45 }
+            ],
+            cash: 50000
+        };
+        renderHoldingsForm();
+        document.getElementById("jsonPreview").style.display = "none";
+    }
+
+    // 触发 GitHub Actions 工作流
+    async function triggerWorkflow() {
+        let token = localStorage.getItem(GITHUB_TOKEN_KEY);
+        if (!token) {
+            token = prompt('请输入 GitHub Personal Access Token (需要 repo 权限)：\n生成地址：https://github.com/settings/tokens\n注意：令牌将保存在浏览器本地，不会上传。');
+            if (!token) return;
+            localStorage.setItem(GITHUB_TOKEN_KEY, token);
+        }
+        const btn = document.getElementById('triggerAnalysisBtn');
+        const originalText = btn.innerText;
+        btn.innerText = '⏳ 触发中...';
+        btn.disabled = true;
+        try {
+            const response = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${WORKFLOW_ID}/dispatches`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Accept': 'application/vnd.github.v3+json',
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ ref: 'main' })
+            });
+            if (response.ok) {
+                alert('✅ 已触发分析任务！\n请稍等几分钟，然后点击“刷新报告”查看结果。');
+            } else {
+                const error = await response.json();
+                if (response.status === 401 || response.status === 403) {
+                    localStorage.removeItem(GITHUB_TOKEN_KEY);
+                    alert('令牌无效或已过期，请重新输入。');
+                } else {
+                    alert(`❌ 触发失败 (${response.status}): ${error.message || '未知错误'}`);
+                }
+            }
+        } catch (err) {
+            alert(`网络错误：${err.message}`);
+        } finally {
+            btn.innerText = originalText;
+            btn.disabled = false;
+        }
+    }
+
+    // 初始化
+    async function init() {
+        // 加载持仓（先尝试从 GitHub 读取现有的 holdings.json）
+        try {
+            const resp = await fetch(`https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/holdings.json`);
+            if (resp.ok) {
+                currentHoldings = await resp.json();
+            } else {
+                resetHoldings();
+            }
+        } catch (e) {
+            resetHoldings();
+        }
+        renderHoldingsForm();
+        loadLatestReport();
+        loadHistoryList();
+
+        // 绑定事件
+        document.getElementById("addHoldingBtn").addEventListener("click", () => {
+            currentHoldings.holdings.push({ fund_code: "", fund_name: "", amount: 0, cost: 0 });
+            renderHoldingsForm();
+        });
+        document.getElementById("generateJsonBtn").addEventListener("click", showJsonPreview);
+        document.getElementById("copyJsonBtn").addEventListener("click", copyJsonToClipboard);
+        document.getElementById("resetHoldingsBtn").addEventListener("click", resetHoldings);
+        document.getElementById("refreshReportBtn").addEventListener("click", loadLatestReport);
+        document.getElementById("triggerAnalysisBtn").addEventListener("click", triggerWorkflow);
+    }
+
+    init();
+</script>
+</body>
+</html>
