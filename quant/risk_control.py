@@ -1,82 +1,72 @@
-# quant/risk_control.py
-import logging
+"""
+风控模块：检查持仓集中度、整体仓位、单只亏损等
+"""
 
-logger = logging.getLogger(__name__)
-
-def check_position_risk(holdings, cash, market_risk_level):
+def check_position_risk(holdings: dict) -> str:
     """
-    检查仓位风险
-    返回风控建议
-    """
-    total_value = sum(h.get("amount", 0) for h in holdings)
-    total_assets = total_value + cash
-    
-    if total_assets == 0:
-        return {"risk_level": "low", "advice": "暂无持仓"}
-    
-    # 计算各维度风险
-    risks = []
-    
-    # 1. 单一基金集中度风险（不超过20%）
-    for h in holdings:
-        fund_ratio = h.get("amount", 0) / total_assets * 100
-        if fund_ratio > 20:
-            risks.append({
-                "type": "concentration",
-                "fund_code": h.get("fund_code"),
-                "ratio": fund_ratio,
-                "advice": f"基金 {h.get('fund_code')} 仓位占比 {fund_ratio:.1f}%，建议控制在20%以内"
-            })
-    
-    # 2. 整体仓位风险
-    position_ratio = total_value / total_assets * 100
-    if position_ratio > 80:
-        risks.append({
-            "type": "over_position",
-            "ratio": position_ratio,
-            "advice": f"整体仓位 {position_ratio:.1f}%，建议保留现金以应对风险"
-        })
-    
-    # 3. 市场风险（结合估值）
-    if market_risk_level and market_risk_level.get("level") == "high":
-        risks.append({
-            "type": "market_risk",
-            "advice": market_risk_level.get("advice", "市场估值偏高，注意风险")
-        })
-    
-    # 4. 单只基金亏损风险
-    for h in holdings:
-        profit_loss = h.get("profit_loss", 0)
-        if profit_loss < -h.get("amount", 0) * 0.1:  # 亏损超过10%
-            risks.append({
-                "type": "loss",
-                "fund_code": h.get("fund_code"),
-                "loss_ratio": abs(profit_loss) / h.get("amount", 1) * 100,
-                "advice": f"基金 {h.get('fund_code')} 亏损超过10%，建议关注"
-            })
-    
-    risk_level = "low"
-    if len(risks) >= 2:
-        risk_level = "high"
-    elif len(risks) >= 1:
-        risk_level = "medium"
-    
-    return {
-        "level": risk_level,
-        "risks": risks,
-        "total_assets": total_assets,
-        "position_ratio": position_ratio
+    根据持仓数据返回风控提示
+    holdings 格式: {
+        "000001": {"name": "基金A", "amount": 10000, "cost": 1.2, "current": 1.15},
+        ...
     }
+    """
+    if not holdings:
+        return "暂无持仓数据，请维护 holdings.json"
 
-def get_risk_advice_for_ai(holdings, cash, market_risk_level):
-    """生成供AI使用的风控提示"""
-    risk_check = check_position_risk(holdings, cash, market_risk_level)
-    
-    if not risk_check.get("risks"):
-        return "当前持仓结构合理，无明显风险。"
-    
-    advice_lines = ["【风控提示】"]
-    for r in risk_check["risks"]:
-        advice_lines.append(f"- {r['advice']}")
-    
-    return "\n".join(advice_lines)
+    total_value = 0.0
+    max_single_ratio = 0.0
+    max_single_name = ""
+    loss_funds = []
+
+    for code, info in holdings.items():
+        amount = info.get("amount", 0)
+        current = info.get("current", info.get("cost", 0))
+        value = amount * current
+        total_value += value
+
+        # 单只基金占比
+        if total_value > 0:
+            ratio = value / total_value
+            if ratio > max_single_ratio:
+                max_single_ratio = ratio
+                max_single_name = info.get("name", code)
+
+        # 亏损检查（当前净值低于成本价）
+        cost = info.get("cost", 0)
+        if cost > 0 and current < cost:
+            loss_rate = (cost - current) / cost
+            loss_funds.append((info.get("name", code), loss_rate))
+
+    risk_msgs = []
+    if max_single_ratio > 0.3:
+        risk_msgs.append(f"⚠️ 单只基金 {max_single_name} 占比 {max_single_ratio:.1%}，超过30%集中度红线")
+    elif max_single_ratio > 0.2:
+        risk_msgs.append(f"📌 单只基金 {max_single_name} 占比 {max_single_ratio:.1%}，接近20%建议上限")
+
+    if len(holdings) > 5:
+        risk_msgs.append(f"📌 持有基金数量 {len(holdings)} 只，超过5只，建议精简")
+
+    for name, rate in loss_funds:
+        if rate > 0.1:
+            risk_msgs.append(f"🔴 {name} 亏损 {rate:.1%}，超过10%止损线")
+        elif rate > 0.05:
+            risk_msgs.append(f"🟡 {name} 亏损 {rate:.1%}，建议关注")
+
+    if not risk_msgs:
+        return "✅ 持仓结构健康，未触发风控阈值"
+    return "\n".join(risk_msgs)
+
+
+def get_risk_advice(holdings: dict, market_risk: str) -> str:
+    """
+    根据持仓和市场风险等级生成综合风控建议
+    market_risk: 'high' / 'medium' / 'low'
+    """
+    risk_msg = check_position_risk(holdings)
+
+    if market_risk == "high":
+        return f"【市场风险高】{risk_msg}\n建议：降低总仓位至5成以下，增持货币或债券类资产。"
+    elif market_risk == "low":
+        return f"【市场风险低】{risk_msg}\n建议：可维持7成以上仓位，积极配置权益类资产。"
+    else:  # medium 或未知
+        return f"【市场风险中等】{risk_msg}\n建议：保持中性仓位，均衡配置。"
