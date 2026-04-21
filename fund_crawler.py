@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# fund_crawler.py - 财经RSS抓取（支持健康实例检测）+ 多模型投票
+# fund_crawler.py - 财经RSS抓取 + 多模型投票（优化模型列表）
 import os
 import json
 import re
@@ -26,12 +26,14 @@ logger = logging.getLogger(__name__)
 # ================= 配置 =================
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# 当前可用的免费模型列表（已验证）
 MODELS = [
-    "openrouter/free",
-    "qwen/qwen-7b-chat:free",
-    "deepseek/deepseek-chat:free",
-    "google/gemini-2.0-flash-exp:free",
-    "microsoft/phi-3-medium-128k-instruct:free"
+    "mistralai/mistral-7b-instruct:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "nousresearch/hermes-3-llama-3.1-8b:free",
+    "qwen/qwen-2.5-7b-instruct:free",
+    "openrouter/free",  # 自动路由兜底
 ]
 
 MAX_WORKERS = 5
@@ -64,7 +66,6 @@ def load_sources() -> List[str]:
         with open("fund_sources.json", "r", encoding="utf-8") as f:
             return json.load(f)
     except:
-        # 如果文件不存在或出错，使用默认源
         return FALLBACK_FEEDS
 
 def load_holdings() -> Dict:
@@ -83,20 +84,21 @@ def test_rsshub_instance(instance: str) -> bool:
         return False
 
 def get_healthy_rsshub() -> str:
-    """随机选择一个健康的 RSSHub 实例"""
     random.shuffle(RSSHUB_INSTANCES)
     for inst in RSSHUB_INSTANCES:
         if test_rsshub_instance(inst):
             return inst
-    # 全部失败则返回第一个
     return RSSHUB_INSTANCES[0]
 
 # ================= RSS 抓取 =================
 def clean_html(text: str) -> str:
     if not text:
         return ""
-    soup = BeautifulSoup(text, "html.parser")
-    return soup.get_text().strip()[:500]
+    # 避免 BeautifulSoup 的警告：如果 text 看起来像文件名，但实际是 HTML
+    if text.strip().startswith("<"):
+        soup = BeautifulSoup(text, "html.parser")
+        return soup.get_text().strip()[:500]
+    return text[:500]
 
 def parse_published(published_str: str) -> Optional[datetime]:
     if not published_str:
@@ -118,7 +120,6 @@ def parse_published(published_str: str) -> Optional[datetime]:
     return None
 
 def fetch_rss(url: str, rsshub_instance: str) -> List[Dict]:
-    """抓取单个 RSS 源，如果是 RSSHub 路由则替换实例"""
     if "rsshub.app" in url:
         url = url.replace("https://rsshub.app", rsshub_instance)
     try:
@@ -310,7 +311,6 @@ def main():
     articles = fetch_all_sources()
     if not articles:
         logger.warning("未抓取到任何财经资讯，将使用历史数据或跳过分析")
-        # 仍然尝试分析，但提示无数据
         news_summary = "无近期市场资讯。"
     else:
         news_summary = "\n".join([f"- {a['title']} ({a['source']})" for a in articles[:50]])
@@ -333,7 +333,7 @@ def main():
     "fund_code": "基金代码",
     "fund_name": "基金名称",
     "recommendation": "buy/sell/hold/adjust",
-    "suggested_amount": 数字,
+    "suggested_amount": 数字（买入或调仓时的建议金额）,
     "reason": "决策理由（不超过30字）"
   }}
 ]
