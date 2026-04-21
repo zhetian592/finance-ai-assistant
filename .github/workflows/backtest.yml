@@ -1,4 +1,3 @@
-# .github/workflows/backtest.yml
 name: Backtest
 
 on:
