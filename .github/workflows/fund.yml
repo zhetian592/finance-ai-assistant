@@ -50,3 +50,5 @@ jobs:
         with:
           commit_message: "Auto update fund report"
           file_pattern: "fund_report.html backtest/recommendations.json"
+          # 如果你有配置 PAT_TOKEN 可以取消注释，否则确保仓库 Actions 权限为读写
+          # github_token: ${{ secrets.PAT_TOKEN }}
