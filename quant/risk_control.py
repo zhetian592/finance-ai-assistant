@@ -1,3 +1,4 @@
+# quant/risk_control.py
 """
 风控模块：检查持仓集中度、整体仓位、单只亏损等
 """
@@ -56,17 +57,37 @@ def check_position_risk(holdings: dict) -> str:
         return "✅ 持仓结构健康，未触发风控阈值"
     return "\n".join(risk_msgs)
 
-
-def get_risk_advice(holdings: dict, market_risk: str) -> str:
+def get_risk_advice(holdings: dict, cash: float, market_risk: dict) -> str:
     """
-    根据持仓和市场风险等级生成综合风控建议
-    market_risk: 'high' / 'medium' / 'low'
+    根据持仓、现金和市场风险等级生成综合风控建议
+    holdings: 持仓字典，格式同 check_position_risk
+    cash: 现金资产（单位：元）
+    market_risk: get_market_risk_level() 返回的完整字典，包含 'level' 字段
     """
+    # 获取市场风险等级字符串
+    risk_level = market_risk.get('level', 'medium') if market_risk else 'medium'
     risk_msg = check_position_risk(holdings)
-
-    if market_risk == "high":
-        return f"【市场风险高】{risk_msg}\n建议：降低总仓位至5成以下，增持货币或债券类资产。"
-    elif market_risk == "low":
-        return f"【市场风险低】{risk_msg}\n建议：可维持7成以上仓位，积极配置权益类资产。"
+    
+    # 计算总资产并给出仓位建议
+    total_asset = cash
+    for code, info in holdings.items():
+        amount = info.get("amount", 0)
+        current = info.get("current", info.get("cost", 0))
+        total_asset += amount * current
+    position_ratio = (total_asset - cash) / total_asset if total_asset > 0 else 0
+    
+    position_advice = ""
+    if risk_level == "high":
+        position_advice = f"当前仓位 {position_ratio:.1%}，建议降低至5成以下，增持货币或债券类资产。"
+    elif risk_level == "low":
+        position_advice = f"当前仓位 {position_ratio:.1%}，建议可维持7成以上仓位，积极配置权益类资产。"
+    else:
+        position_advice = f"当前仓位 {position_ratio:.1%}，建议保持中性仓位，均衡配置。"
+    
+    # 构建最终建议
+    if risk_level == "high":
+        return f"【市场风险高】{risk_msg}\n{position_advice}"
+    elif risk_level == "low":
+        return f"【市场风险低】{risk_msg}\n{position_advice}"
     else:  # medium 或未知
-        return f"【市场风险中等】{risk_msg}\n建议：保持中性仓位，均衡配置。"
+        return f"【市场风险中等】{risk_msg}\n{position_advice}"
