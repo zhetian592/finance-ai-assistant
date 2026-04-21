@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: '0 2 * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: '分析模式'
+        required: true
+        default: 'recommend'
+        type: choice
+        options:
+          - recommend
+          - hold
 
 jobs:
   run:
@@ -15,14 +24,17 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install requests feedparser beautifulsoup4
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
       - name: Run fund crawler
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
+          ANALYSIS_MODE: ${{ github.event.inputs.mode || 'recommend' }}
         run: python fund_crawler.py
       - name: Commit report
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Auto update fund report"
-          file_pattern: "fund_report.html"
+          file_pattern: "fund_report.html backtest/recommendations.json"
