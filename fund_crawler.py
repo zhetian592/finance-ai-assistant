@@ -24,7 +24,7 @@ except ImportError:
     AKSHARE_AVAILABLE = False
     logging.warning("AKShare 未安装，量化数据功能不可用")
 
-from quant import get_market_risk_level, update_fund_nav, check_position_risk, get_risk_advice_for_ai
+from quant import get_market_risk_level, update_fund_nav, check_position_risk, get_risk_advice
 from backtest import record_ai_recommendation
 
 # ================= 日志配置 =================
@@ -293,8 +293,6 @@ def generate_html_report(aggregated: Dict, news_count: int, holdings_exist: bool
     table{{border-collapse:collapse;width:100%;margin-top:20px}}
     th,td{{border:1px solid #ddd;padding:8px;text-align:left}}
     th{{background:#f2f2f2}}
-    .quant-box{{background:#f0f4f8;padding:12px;border-radius:8px;margin-bottom:20px}}
-    .risk-box{{background:#fff3cd;padding:12px;border-radius:8px;margin-bottom:20px}}
 </style>
 </head>
 <body>
@@ -323,7 +321,7 @@ def main():
 
     # 2. 获取市场量化数据
     market_risk = get_market_risk_level() if AKSHARE_AVAILABLE else None
-    risk_advice = get_risk_advice_for_ai(holdings_list, holdings.get("cash", 0), market_risk) if AKSHARE_AVAILABLE else None
+    risk_advice = get_risk_advice(holdings_list, holdings.get("cash", 0), market_risk) if AKSHARE_AVAILABLE else None
 
     # 3. 自动更新基金净值
     if AKSHARE_AVAILABLE and holdings_list:
@@ -388,7 +386,6 @@ fund_code, fund_name, recommendation(buy/sell/hold/add), evidence(引用新闻�
 
     # 9. 记录AI建议（用于回测）
     for rec in aggregated["final_recommendations"]:
-        # 获取当前净值作为记录
         nav = None
         for h in holdings_list:
             if h.get("fund_code") == rec["fund_code"]:
