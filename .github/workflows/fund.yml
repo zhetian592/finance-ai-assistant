@@ -1,0 +1,27 @@
+name: Fund Recommender
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 每天 UTC 2:00 运行
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run fund crawler
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: python fund_crawler.py
+      - name: Commit report
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto update fund report"
+          file_pattern: "fund_report.html"
