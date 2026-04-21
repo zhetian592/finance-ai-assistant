@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# fund_crawler.py - 稳定版多模型投票基金推荐
+# fund_crawler.py - 双模型稳定投票（OpenRouter + GitHub Models）
 import os
 import json
 import re
@@ -25,22 +25,27 @@ logger = logging.getLogger(__name__)
 
 # ================= 配置 =================
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+GH_MODELS_TOKEN = os.environ.get("GH_MODELS_TOKEN") or os.environ.get("GITHUB_TOKEN")
+
 if not OPENROUTER_API_KEY:
     logger.error("请设置环境变量 OPENROUTER_API_KEY")
     sys.exit(1)
+if not GH_MODELS_TOKEN:
+    logger.warning("未设置 GH_MODELS_TOKEN，GitHub Models 将不可用")
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+GITHUB_MODELS_BASE_URL = "https://models.inference.ai.azure.com"
 
-# 多模型列表（优先使用 openrouter/free 自动路由，保证稳定性）
+# 稳定模型列表
 MODELS = [
-    "openrouter/free",                      # 自动选择可用免费模型，最稳定
-    "google/gemini-2.0-flash-exp:free",     # Gemini 2.0 Flash（如果可用）
+    ("openrouter", "openrouter/free"),           # OpenRouter 自动路由
+    ("github", "gpt-4o-mini"),                  # GitHub Models (需 GH_MODELS_TOKEN)
 ]
 
-MAX_WORKERS = 2          # 并发模型数
+MAX_WORKERS = 2
 REQUEST_TIMEOUT = 30
 
-# 官方财经 RSS 源（稳定，无需依赖 RSSHub）
+# 官方财经 RSS 源（稳定）
 RSS_FEEDS = [
     "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
     "https://feeds.bloomberg.com/markets/news.rss",
@@ -81,7 +86,6 @@ def parse_published(published_str: str) -> Optional[datetime]:
     return None
 
 def fetch_rss_feed(url: str) -> List[Dict]:
-    """抓取单个 RSS 源，返回条目列表"""
     try:
         headers = {"User-Agent": random.choice(USER_AGENTS)}
         resp = requests.get(url, headers=headers, timeout=15)
@@ -90,7 +94,7 @@ def fetch_rss_feed(url: str) -> List[Dict]:
             return []
         feed = feedparser.parse(resp.content)
         items = []
-        cutoff = datetime.utcnow() - timedelta(hours=48)  # 最近48小时
+        cutoff = datetime.utcnow() - timedelta(hours=48)
         for entry in feed.entries[:20]:
             published = entry.get("published", entry.get("updated", ""))
             pub_dt = parse_published(published)
@@ -114,7 +118,6 @@ def fetch_rss_feed(url: str) -> List[Dict]:
         return []
 
 def fetch_all_news() -> List[Dict]:
-    """并发抓取所有财经 RSS"""
     logger.info(f"开始抓取 {len(RSS_FEEDS)} 个财经 RSS")
     all_items = []
     with ThreadPoolExecutor(max_workers=5) as executor:
@@ -131,7 +134,6 @@ def fetch_all_news() -> List[Dict]:
     return all_items
 
 def load_holdings() -> Dict:
-    """读取用户持仓"""
     try:
         with open("holdings.json", "r", encoding="utf-8") as f:
             return json.load(f)
@@ -140,8 +142,7 @@ def load_holdings() -> Dict:
         return {"holdings": [], "cash": 0}
 
 # ================= AI 模型调用 =================
-def call_model(model: str, prompt: str) -> Tuple[str, Optional[str]]:
-    """调用 OpenRouter 模型，带重试"""
+def call_openrouter_model(model: str, prompt: str) -> Tuple[str, Optional[str]]:
     for attempt in range(2):
         try:
             response = requests.post(
@@ -161,46 +162,80 @@ def call_model(model: str, prompt: str) -> Tuple[str, Optional[str]]:
                 timeout=REQUEST_TIMEOUT
             )
             if response.status_code == 200:
-                content = response.json()["choices"][0]["message"]["content"]
-                return (model, content)
+                return (model, response.json()["choices"][0]["message"]["content"])
             else:
-                logger.warning(f"模型 {model} 返回 {response.status_code} (尝试 {attempt+1}/2)")
+                logger.warning(f"OpenRouter 模型 {model} 返回 {response.status_code} (尝试 {attempt+1}/2)")
                 if attempt == 0:
                     time.sleep(2)
         except Exception as e:
-            logger.warning(f"模型 {model} 调用异常 (尝试 {attempt+1}/2): {e}")
+            logger.warning(f"OpenRouter 模型 {model} 调用异常 (尝试 {attempt+1}/2): {e}")
+            if attempt == 0:
+                time.sleep(2)
+    return (model, None)
+
+def call_github_model(model: str, prompt: str) -> Tuple[str, Optional[str]]:
+    if not GH_MODELS_TOKEN:
+        return (model, None)
+    for attempt in range(2):
+        try:
+            response = requests.post(
+                f"{GITHUB_MODELS_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GH_MODELS_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3,
+                    "max_tokens": 2000,
+                },
+                timeout=REQUEST_TIMEOUT
+            )
+            if response.status_code == 200:
+                return (model, response.json()["choices"][0]["message"]["content"])
+            else:
+                logger.warning(f"GitHub 模型 {model} 返回 {response.status_code} (尝试 {attempt+1}/2)")
+                if attempt == 0:
+                    time.sleep(2)
+        except Exception as e:
+            logger.warning(f"GitHub 模型 {model} 调用异常 (尝试 {attempt+1}/2): {e}")
             if attempt == 0:
                 time.sleep(2)
     return (model, None)
 
 def multi_model_vote(prompt: str) -> Dict[str, Any]:
-    """并发调用多个模型，聚合投票结果"""
     logger.info(f"开始多模型投票，模型列表: {MODELS}")
     results = {}
     with ThreadPoolExecutor(max_workers=len(MODELS)) as executor:
-        future_to_model = {executor.submit(call_model, m, prompt): m for m in MODELS}
-        for future in as_completed(future_to_model):
-            model, content = future.result()
-            results[model] = content
-            if content:
-                logger.info(f"模型 {model} 返回成功")
+        future_to_model = {}
+        for provider, model in MODELS:
+            if provider == "openrouter":
+                future = executor.submit(call_openrouter_model, model, prompt)
             else:
-                logger.warning(f"模型 {model} 返回失败")
+                future = executor.submit(call_github_model, model, prompt)
+            future_to_model[future] = f"{provider}:{model}"
+        for future in as_completed(future_to_model):
+            model_name, content = future.result()
+            results[model_name] = content
+            if content:
+                logger.info(f"模型 {model_name} 返回成功")
+            else:
+                logger.warning(f"模型 {model_name} 返回失败")
 
-    # 解析每个模型的输出
-    fund_votes = {}   # {fund_code: {"buy":0, "sell":0, "hold":0, "adjust":0, "reasons":[]}}
-    for model, content in results.items():
+    # 解析投票
+    fund_votes = {}
+    for model_name, content in results.items():
         if not content:
             continue
-        # 尝试提取 JSON
         try:
             json_match = re.search(r'\[\s*\{.*?\}\s*\]', content, re.DOTALL)
             if not json_match:
-                logger.warning(f"模型 {model} 输出中未找到 JSON 数组")
+                logger.warning(f"模型 {model_name} 输出中未找到 JSON 数组")
                 continue
             suggestions = json.loads(json_match.group(0))
         except Exception as e:
-            logger.warning(f"解析模型 {model} 输出失败: {e}")
+            logger.warning(f"解析模型 {model_name} 输出失败: {e}")
             continue
 
         for sug in suggestions:
@@ -212,15 +247,13 @@ def multi_model_vote(prompt: str) -> Dict[str, Any]:
                 fund_votes[code] = {"buy": 0, "sell": 0, "hold": 0, "adjust": 0, "reasons": []}
             fund_votes[code][op] += 1
             fund_votes[code]["reasons"].append({
-                "model": model,
+                "model": model_name,
                 "reason": sug.get("reason", ""),
                 "amount": sug.get("suggested_amount", 0)
             })
 
-    # 计算最终推荐（投票最多的操作）
     final_recommendations = []
     for code, votes in fund_votes.items():
-        # 找出票数最多的操作
         max_op = max(votes, key=lambda k: votes[k] if k in ["buy","sell","hold","adjust"] else -1)
         final_recommendations.append({
             "fund_code": code,
@@ -286,10 +319,9 @@ def main():
     # 1. 抓取财经资讯
     news_articles = fetch_all_news()
     if not news_articles:
-        logger.warning("未抓取到任何财经资讯，将使用空资讯继续分析")
+        logger.warning("未抓取到任何财经资讯")
         news_summary = "无近期市场资讯。"
     else:
-        # 生成资讯摘要（最多50条）
         news_summary = "\n".join([f"- {a['title']} ({a['source']})" for a in news_articles[:50]])
 
     # 2. 读取持仓
