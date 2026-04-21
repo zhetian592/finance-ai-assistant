@@ -1,3 +1,4 @@
+# .github/workflows/fund.yml
 name: Fund Recommender
 
 on:
@@ -19,22 +20,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
+          
       - name: Run fund crawler
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_MODELS_TOKEN: ${{ secrets.GH_MODELS_TOKEN }}
           ANALYSIS_MODE: ${{ github.event.inputs.mode || 'recommend' }}
         run: python fund_crawler.py
+        
       - name: Commit report
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Auto update fund report"
           file_pattern: "fund_report.html backtest/recommendations.json"
+          github_token: ${{ secrets.PAT_TOKEN }}  # 如果使用 PAT 方式，需要配置好对应的Secret
