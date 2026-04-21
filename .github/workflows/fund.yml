@@ -1,4 +1,3 @@
-# .github/workflows/fund.yml
 name: Fund Recommender
 
 on:
@@ -51,4 +50,3 @@ jobs:
         with:
           commit_message: "Auto update fund report"
           file_pattern: "fund_report.html backtest/recommendations.json"
-          github_token: ${{ secrets.PAT_TOKEN }}  # 如果使用 PAT 方式，需要配置好对应的Secret
