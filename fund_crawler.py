@@ -1,409 +1,431 @@
 #!/usr/bin/env python3
-# fund_crawler.py - 完整版：RSS抓取 + 量化数据 + AI分析 + 回测记录
-import os
-import json
-import re
-import time
-import random
-import logging
-import sys
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Any, Optional
+"""
+财经AI决策辅助工具 - 主爬虫
+抓取RSS新闻，调用多模型AI分析，结合量化数据生成基金报告
+"""
 
+import os
+import sys
+import json
+import argparse
+import logging
 import requests
 import feedparser
-from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# ================= 导入量化模块 =================
-try:
-    import akshare as ak
-    AKSHARE_AVAILABLE = True
-    logging.info("AKShare 量化模块加载成功")
-except ImportError:
-    AKSHARE_AVAILABLE = False
-    logging.warning("AKShare 未安装，量化数据功能不可用")
-
+# 量化模块
 from quant import get_market_risk_level, update_fund_nav, check_position_risk, get_risk_advice
-from backtest import record_ai_recommendation
 
-# ================= 日志配置 =================
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# ================= 环境变量 =================
+# ==================== 配置 ====================
+HOLDINGS_FILE = "holdings.json"
+SOURCES_FILE = "fund_sources.json"
+REPORT_FILE = "fund_report.html"
+RECOMMENDATIONS_FILE = "backtest/recommendations.json"
+
+# AI 配置
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-GH_MODELS_TOKEN = os.environ.get("GH_MODELS_TOKEN")
-ANALYSIS_MODE = os.environ.get("ANALYSIS_MODE", "recommend")  # recommend / hold
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 
-if not OPENROUTER_API_KEY:
-    logger.error("请设置环境变量 OPENROUTER_API_KEY")
-    sys.exit(1)
+# 有效的基金代码前缀（用于过滤 AI 编造）
+VALID_FUND_PREFIXES = ["00", "01", "02", "50", "51", "16", "18"]  # 常见基金代码开头
 
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-GITHUB_MODELS_BASE_URL = "https://models.inference.ai.azure.com"
-REQUEST_TIMEOUT = 45
-MAX_RETRIES = 2
-
-# ================= RSS 源配置 =================
-RSS_FEEDS = [
-    "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
-    "https://feeds.bloomberg.com/markets/news.rss",
-    "https://www.ft.com/?format=rss",
-    "https://www.wsj.com/xml/rss/3_7085.xml",
-]
-
-USER_AGENTS = ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"]
-
-# ================= 辅助函数 =================
-def clean_html(text: str) -> str:
-    if not text:
-        return ""
-    if text.strip().startswith("<"):
-        soup = BeautifulSoup(text, "html.parser")
-        return soup.get_text().strip()[:500]
-    return text[:500]
-
-def parse_published(published_str: str) -> Optional[datetime]:
-    if not published_str:
-        return None
-    formats = [
-        "%a, %d %b %Y %H:%M:%S %Z",
-        "%Y-%m-%dT%H:%M:%S%z",
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%d %H:%M:%S",
-    ]
-    for fmt in formats:
-        try:
-            dt = datetime.strptime(published_str, fmt)
-            if dt.tzinfo:
-                dt = dt.replace(tzinfo=None)
-            return dt
-        except:
-            continue
-    return None
-
-def fetch_rss_feed(url: str) -> List[Dict]:
+# ==================== 辅助函数 ====================
+def load_json(file_path: str, default: Any = None) -> Any:
+    """加载 JSON 文件，如果不存在或出错返回默认值"""
+    if not os.path.exists(file_path):
+        return default if default is not None else {}
     try:
-        headers = {"User-Agent": random.choice(USER_AGENTS)}
-        resp = requests.get(url, headers=headers, timeout=15)
-        if resp.status_code != 200:
-            logger.warning(f"RSS 返回 {resp.status_code} - {url}")
-            return []
-        feed = feedparser.parse(resp.content)
-        items = []
-        cutoff = datetime.utcnow() - timedelta(hours=48)
-        for entry in feed.entries[:20]:
-            published = entry.get("published", entry.get("updated", ""))
-            pub_dt = parse_published(published)
-            if pub_dt and pub_dt < cutoff:
-                continue
-            title = clean_html(entry.get("title", ""))
-            summary = clean_html(entry.get("summary", ""))
-            if not summary:
-                summary = title
-            link = entry.get("link", "")
-            items.append({
-                "title": title,
-                "link": link,
-                "summary": summary[:500],
-                "source": url
-            })
-        return items
-    except Exception as e:
-        logger.error(f"抓取失败 {url}: {e}")
-        return []
-
-def fetch_all_news() -> List[Dict]:
-    logger.info(f"开始抓取 {len(RSS_FEEDS)} 个财经 RSS")
-    all_items = []
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_url = {executor.submit(fetch_rss_feed, url): url for url in RSS_FEEDS}
-        for future in as_completed(future_to_url):
-            url = future_to_url[future]
-            try:
-                items = future.result()
-                all_items.extend(items)
-                logger.info(f"✓ {url} -> {len(items)} 条")
-            except Exception as e:
-                logger.error(f"✗ {url} 异常: {e}")
-    logger.info(f"共抓取 {len(all_items)} 条财经资讯")
-    return all_items
-
-def load_holdings() -> Dict:
-    try:
-        with open("holdings.json", "r", encoding="utf-8") as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
-        logger.error(f"读取 holdings.json 失败: {e}")
-        return {"holdings": [], "cash": 0}
+        logger.error(f"加载 {file_path} 失败: {e}")
+        return default if default is not None else {}
 
-# ================= AI 调用 =================
-def call_openrouter(prompt: str) -> Optional[str]:
-    for attempt in range(MAX_RETRIES):
-        try:
-            resp = requests.post(
-                f"{OPENROUTER_BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://github.com/zhetian592/finance-ai-assistant",
-                    "X-Title": "Fund Recommender"
-                },
-                json={
-                    "model": "openrouter/free",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 2000,
-                },
-                timeout=REQUEST_TIMEOUT
-            )
-            if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"]
-            else:
-                logger.warning(f"OpenRouter 尝试 {attempt+1}: HTTP {resp.status_code}")
-        except Exception as e:
-            logger.warning(f"OpenRouter 异常 (尝试 {attempt+1}): {e}")
-        if attempt < MAX_RETRIES - 1:
-            time.sleep(3)
-    return None
+def save_json(file_path: str, data: Any):
+    """保存 JSON 文件"""
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
-def call_github_model(prompt: str) -> Optional[str]:
-    if not GH_MODELS_TOKEN:
-        return None
-    for attempt in range(MAX_RETRIES):
-        try:
-            resp = requests.post(
-                f"{GITHUB_MODELS_BASE_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {GH_MODELS_TOKEN}", "Content-Type": "application/json"},
-                json={
-                    "model": "gpt-4o-mini",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 2000,
-                },
-                timeout=REQUEST_TIMEOUT
-            )
-            if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"]
-            else:
-                logger.warning(f"GitHub Models 尝试 {attempt+1}: HTTP {resp.status_code}")
-        except Exception as e:
-            logger.warning(f"GitHub Models 异常: {e}")
-        if attempt < MAX_RETRIES - 1:
-            time.sleep(3)
-    return None
+def is_valid_fund_code(code: str) -> bool:
+    """检查基金代码是否有效（6位数字，以常见前缀开头）"""
+    if not code or not isinstance(code, str):
+        return False
+    if not code.isdigit() or len(code) != 6:
+        return False
+    for prefix in VALID_FUND_PREFIXES:
+        if code.startswith(prefix):
+            return True
+    return False
 
-def parse_ai_output(content: str, valid_codes: set) -> List[Dict]:
+# ==================== 新闻抓取 ====================
+def fetch_rss_feed(url: str, timeout: int = 15) -> List[Dict]:
+    """抓取单个 RSS 源，返回文章列表"""
     try:
-        json_match = re.search(r'\[\s*\{.*?\}\s*\]', content, re.DOTALL)
-        if not json_match:
-            return []
-        data = json.loads(json_match.group(0))
-        filtered = []
-        for item in data:
-            code = item.get("fund_code")
-            if code and code in valid_codes:
-                if "evidence" not in item:
-                    item["evidence"] = ["依据市场资讯分析"]
-                filtered.append(item)
-        return filtered
+        feed = feedparser.parse(url)
+        entries = []
+        for entry in feed.entries[:10]:  # 每个源最多10条
+            entries.append({
+                "title": entry.get("title", ""),
+                "summary": entry.get("summary", ""),
+                "link": entry.get("link", ""),
+                "published": entry.get("published", ""),
+                "source": url
+            })
+        return entries
     except Exception as e:
-        logger.warning(f"JSON 解析失败: {e}")
+        logger.warning(f"RSS 抓取失败 {url}: {e}")
         return []
 
-def multi_model_vote(prompt: str, valid_codes: set) -> Dict:
+def fetch_all_news(sources: List[str]) -> List[Dict]:
+    """并发抓取所有 RSS 源"""
+    all_news = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_url = {executor.submit(fetch_rss_feed, url): url for url in sources}
+        for future in as_completed(future_to_url):
+            entries = future.result()
+            all_news.extend(entries)
+    # 去重（按标题）
+    seen = set()
+    unique = []
+    for item in all_news:
+        title = item.get("title", "")
+        if title and title not in seen:
+            seen.add(title)
+            unique.append(item)
+    return unique
+
+# ==================== AI 调用 ====================
+def call_openrouter(prompt: str, model: str = "openrouter/free") -> Optional[str]:
+    """调用 OpenRouter API"""
+    if not OPENROUTER_API_KEY:
+        logger.warning("未设置 OPENROUTER_API_KEY，跳过 OpenRouter")
+        return None
+    try:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 1000
+            },
+            timeout=30
+        )
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"]
+        else:
+            logger.error(f"OpenRouter 错误: {response.status_code} {response.text}")
+            return None
+    except Exception as e:
+        logger.error(f"OpenRouter 调用失败: {e}")
+        return None
+
+def call_github_models(prompt: str) -> Optional[str]:
+    """调用 GitHub Models (gpt-4o-mini)"""
+    if not GITHUB_TOKEN:
+        logger.warning("未设置 GITHUB_TOKEN，跳过 GitHub Models")
+        return None
+    try:
+        response = requests.post(
+            "https://models.inference.ai.azure.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GITHUB_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 1000
+            },
+            timeout=30
+        )
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"]
+        else:
+            logger.error(f"GitHub Models 错误: {response.status_code} {response.text}")
+            return None
+    except Exception as e:
+        logger.error(f"GitHub Models 调用失败: {e}")
+        return None
+
+def get_ai_recommendations(news_text: str, holdings: List[Dict], market_risk: Dict) -> Dict:
+    """调用多个 AI 模型，获取基金操作建议（投票机制）"""
+    # 构建持仓信息
+    holdings_info = "\n".join([
+        f"- {h.get('name', h.get('code'))} (代码:{h.get('code')}) 持有{h.get('amount',0)}份 成本{h.get('cost',0)} 现价{h.get('current',0)}"
+        for h in holdings
+    ])
+    
+    prompt = f"""你是一个专业的基金投资顾问。基于以下财经新闻和市场风险分析，对持仓基金给出操作建议。
+
+新闻摘要：
+{news_text[:3000]}
+
+市场风险等级：{market_risk.get('level', 'medium')} - {market_risk.get('advice', '')}
+风险原因：{', '.join(market_risk.get('reasons', []))}
+
+持仓基金：
+{holdings_info}
+
+请为每只基金输出 JSON 格式建议，格式如下：
+[
+  {{"code": "基金代码", "action": "买入/卖出/持有", "confidence": 0-100, "reason": "简短理由"}}
+]
+注意：action 只能是 "买入"、"卖出" 或 "持有"。不要编造不存在的基金代码。
+"""
+    
+    # 并发调用两个模型
     results = {}
     with ThreadPoolExecutor(max_workers=2) as executor:
         future_open = executor.submit(call_openrouter, prompt)
-        future_github = executor.submit(call_github_model, prompt)
-        results["openrouter"] = future_open.result(timeout=60) if future_open else None
-        results["github"] = future_github.result(timeout=60) if future_github else None
-
-    fund_votes = {}
-    for model_name, content in results.items():
-        if not content:
+        future_github = executor.submit(call_github_models, prompt)
+        results['openrouter'] = future_open.result()
+        results['github'] = future_github.result()
+    
+    # 解析 JSON 建议
+    final_recommendations = []
+    model_outputs = []
+    for model_name, output in results.items():
+        if output:
+            model_outputs.append(output)
+            try:
+                # 提取 JSON 部分（有些模型会加额外文字）
+                json_start = output.find('[')
+                json_end = output.rfind(']') + 1
+                if json_start != -1 and json_end > json_start:
+                    json_str = output[json_start:json_end]
+                    recs = json.loads(json_str)
+                    if isinstance(recs, list):
+                        final_recommendations.extend(recs)
+            except Exception as e:
+                logger.warning(f"解析 {model_name} 输出失败: {e}")
+    
+    # 投票去重：按 code 聚合，取多数 action
+    vote_map = {}
+    for rec in final_recommendations:
+        code = rec.get("code")
+        if not code or not is_valid_fund_code(code):
             continue
-        suggestions = parse_ai_output(content, valid_codes)
-        logger.info(f"模型 {model_name} 解析出 {len(suggestions)} 条有效建议")
-        for sug in suggestions:
-            code = sug.get("fund_code")
-            name = sug.get("fund_name", "")
-            op = sug.get("recommendation", "").lower()
-            if op not in ["buy","sell","hold","add"]:
-                continue
-            if code not in fund_votes:
-                fund_votes[code] = {"name": name, "buy":0, "sell":0, "hold":0, "add":0, "evidences":[]}
-            fund_votes[code][op] += 1
-            fund_votes[code]["evidences"].extend(sug.get("evidence", []))
-
+        action = rec.get("action")
+        if action not in ["买入", "卖出", "持有"]:
+            continue
+        if code not in vote_map:
+            vote_map[code] = {"actions": [], "reasons": []}
+        vote_map[code]["actions"].append(action)
+        vote_map[code]["reasons"].append(rec.get("reason", ""))
+    
+    # 决定最终建议
     final = []
-    for code, votes in fund_votes.items():
-        max_op = max(["buy","sell","hold","add"], key=lambda k: votes[k])
+    for code, data in vote_map.items():
+        actions = data["actions"]
+        # 简单投票：出现次数最多的 action
+        final_action = max(set(actions), key=actions.count)
+        # 置信度按模型数量归一化
+        confidence = int((actions.count(final_action) / len(actions)) * 100)
+        reason = "; ".join(set(data["reasons"][:2]))
         final.append({
-            "fund_code": code,
-            "fund_name": votes["name"],
-            "recommendation": max_op,
-            "votes": {k: votes[k] for k in ["buy","sell","hold","add"]},
-            "evidences": list(set(votes["evidences"]))[:3]
+            "code": code,
+            "action": final_action,
+            "confidence": confidence,
+            "reason": reason
         })
-    return {"final_recommendations": final, "models_participated": sum(1 for v in results.values() if v)}
+    return {"recommendations": final, "raw_outputs": model_outputs}
 
-# ================= 报告生成 =================
-def generate_html_report(aggregated: Dict, news_count: int, holdings_exist: bool, mode: str,
-                         market_risk=None, risk_advice=None) -> str:
-    if not holdings_exist:
-        return f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>基金报告</title></head>
-<body><h1>📈 基金报告</h1><p>暂无持仓，请先在仪表盘添加基金。</p>
-<p>生成时间：{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</p></body></html>"""
-
-    rows = ""
-    for rec in aggregated["final_recommendations"]:
-        op_cn = {"buy":"买入", "sell":"卖出", "hold":"持有", "add":"加仓"}.get(rec["recommendation"], rec["recommendation"])
-        evidence = rec["evidences"][0] if rec["evidences"] else "无"
-        rows += f"<tr><td>{rec['fund_code']}</td><td>{rec['fund_name']}</td><td>{op_cn}</td><td>{evidence}</td></tr>"
-
-    # 构建量化数据部分
-    quant_section = ""
-    if market_risk:
-        quant_section = f"""
-        <div style="background:#f0f4f8; padding:12px; border-radius:8px; margin-bottom:20px;">
-            <h3>📊 市场量化数据</h3>
-            <p><strong>市场风险等级</strong>: {market_risk.get('level', 'unknown')}</p>
-            <p><strong>风险评分</strong>: {market_risk.get('score', 0)}</p>
-            <p><strong>风险建议</strong>: {market_risk.get('advice', '')}</p>
-            <p><strong>沪深300 PE</strong>: {market_risk.get('valuation', {}).get('current_pe', 'N/A')}</p>
-            <p><strong>北向资金净流入(近5日)</strong>: {market_risk.get('north_flow', {}).get('total_net_billion', 'N/A')} 亿元</p>
-        </div>
-        """
-    if risk_advice:
-        quant_section += f"""
-        <div style="background:#fff3cd; padding:12px; border-radius:8px; margin-bottom:20px;">
-            <h3>⚠️ 风控提示</h3>
-            <pre style="white-space:pre-wrap; margin:0;">{risk_advice}</pre>
-        </div>
-        """
-
-    title = "基金推荐报告" if mode == "recommend" else "持有分析报告"
+# ==================== 报告生成 ====================
+def generate_html_report(holdings: List[Dict], news: List[Dict], ai_result: Dict, 
+                         market_risk: Dict, risk_advice: str, mode: str) -> str:
+    """生成 HTML 报告"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    risk_level = market_risk.get("level", "unknown")
+    risk_color = {"high": "red", "medium": "orange", "low": "green"}.get(risk_level, "gray")
+    
     html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>{title}</title>
-<style>
-    body{{font-family:Arial;margin:20px}}
-    table{{border-collapse:collapse;width:100%;margin-top:20px}}
-    th,td{{border:1px solid #ddd;padding:8px;text-align:left}}
-    th{{background:#f2f2f2}}
-</style>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>财经AI决策报告 - {timestamp}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        h1 {{ color: #2c3e50; }}
+        .risk {{ padding: 10px; border-radius: 5px; margin: 10px 0; }}
+        .risk-high {{ background-color: #ffebee; border-left: 5px solid red; }}
+        .risk-medium {{ background-color: #fff3e0; border-left: 5px solid orange; }}
+        .risk-low {{ background-color: #e8f5e9; border-left: 5px solid green; }}
+        table {{ border-collapse: collapse; width: 100%; margin: 15px 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f2f2f2; }}
+        .buy {{ color: green; font-weight: bold; }}
+        .sell {{ color: red; font-weight: bold; }}
+        .hold {{ color: gray; }}
+        .news-item {{ margin-bottom: 15px; padding: 10px; background: #f9f9f9; }}
+    </style>
 </head>
 <body>
-<h1>📈 {title}</h1>
-<p>生成时间：{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
-<p>参与模型数：{aggregated['models_participated']}</p>
-<p>抓取资讯数：{news_count}</p>
-{quant_section}
-<h2>分析建议</h2>
-<table><thead><tr><th>代码</th><th>名称</th><th>操作</th><th>依据证据</th></tr></thead><tbody>{rows}</tbody></table>
-<p>注：仅供参考，不构成投资建议。</p>
-</body></html>"""
+    <h1>📊 财经AI决策报告</h1>
+    <p>生成时间: {timestamp}</p>
+    <p>运行模式: {mode}</p>
+    
+    <div class="risk risk-{risk_level}">
+        <h2>📈 市场风险评估</h2>
+        <p>等级: <strong>{risk_level.upper()}</strong> - {market_risk.get('advice', '')}</p>
+        <p>评分: {market_risk.get('score', 0)}</p>
+        <ul>
+"""
+    for reason in market_risk.get('reasons', []):
+        html += f"<li>{reason}</li>"
+    
+    html += f"""
+        </ul>
+    </div>
+    
+    <div class="risk risk-{risk_level}">
+        <h2>🛡️ 风控建议</h2>
+        <pre>{risk_advice}</pre>
+    </div>
+    
+    <h2>💰 持仓与AI建议</h2>
+    <table>
+        <tr><th>基金代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>AI建议</th><th>置信度</th><th>理由</th></tr>
+"""
+    # 构建建议映射
+    rec_map = {r['code']: r for r in ai_result.get('recommendations', [])}
+    for fund in holdings:
+        code = fund.get('code', '')
+        name = fund.get('name', '')
+        amount = fund.get('amount', 0)
+        cost = fund.get('cost', 0)
+        current = fund.get('current', 0)
+        rec = rec_map.get(code, {})
+        action = rec.get('action', '持有')
+        confidence = rec.get('confidence', 0)
+        reason = rec.get('reason', '无AI建议')
+        action_class = f"class='{action.lower()}'" if action in ['买入','卖出','持有'] else ""
+        html += f"""
+        <tr>
+            <td>{code}</td><td>{name}</td><td>{amount}</td><td>{cost:.4f}</td><td>{current:.4f}</td>
+            <td {action_class}>{action}</td><td>{confidence}%</td><td>{reason}</td>
+        </tr>
+"""
+    html += """
+    </table>
+    
+    <h2>📰 近期财经新闻</h2>
+"""
+    for idx, item in enumerate(news[:10]):
+        title = item.get('title', '无标题')
+        summary = item.get('summary', '')[:200]
+        link = item.get('link', '#')
+        html += f"""
+    <div class="news-item">
+        <a href="{link}" target="_blank"><strong>{title}</strong></a>
+        <p>{summary}...</p>
+    </div>
+"""
+    html += """
+</body>
+</html>
+"""
     return html
 
-def save_report(content: str):
-    with open("fund_report.html", "w", encoding="utf-8") as f:
-        f.write(content)
-    logger.info("报告已保存")
-
-# ================= 主流程 =================
+# ==================== 主函数 ====================
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["recommend", "hold"], default="recommend",
+                        help="recommend: 正常推荐; hold: 只读持仓不调用AI")
+    args = parser.parse_args()
+    
     # 1. 加载持仓
-    holdings = load_holdings()
-    holdings_list = holdings.get("holdings", [])
-    valid_codes = {h["fund_code"] for h in holdings_list}
-
-    # 2. 获取市场量化数据
-    market_risk = get_market_risk_level() if AKSHARE_AVAILABLE else None
-    risk_advice = get_risk_advice(holdings_list, holdings.get("cash", 0), market_risk) if AKSHARE_AVAILABLE else None
-
-    # 3. 自动更新基金净值
-    if AKSHARE_AVAILABLE and holdings_list:
-        updated = update_fund_nav(holdings_list)
-        if updated:
-            logger.info("基金净值已自动更新")
-
-    if not holdings_list:
-        logger.info("无持仓，生成空报告")
-        html = generate_html_report({}, 0, False, ANALYSIS_MODE, market_risk, risk_advice)
-        save_report(html)
-        return
-
-    # 4. 构建持仓文本（包含盈亏信息）
-    holdings_text = json.dumps(holdings, ensure_ascii=False, indent=2)
-
-    # 5. 抓取新闻
-    news = fetch_all_news()
-    news_summary = "\n".join([f"- {a['title']} ({a['source']})" for a in news[:50]]) if news else "无资讯"
-
-    # 6. 构建量化数据文本
-    quant_text = ""
-    if market_risk:
-        quant_text = f"""
-**市场量化数据**：
-- 沪深300 PE: {market_risk.get('valuation', {}).get('current_pe', 'N/A')}
-- 北向资金近5日净流入: {market_risk.get('north_flow', {}).get('total_net_billion', 'N/A')} 亿元
-- 市场风险等级: {market_risk.get('level', 'unknown')}
-- 市场建议: {market_risk.get('advice', '')}
-"""
-
-    # 7. 构建提示词
-    if ANALYSIS_MODE == "hold":
-        prompt = f"""你是一名投资分析师。用户已持有以下基金，请根据最新市场资讯和量化数据，分析每只基金是否应该继续持有、卖出或加仓。必须引用新闻原文作为证据。
-
-持仓及盈亏：
-{holdings_text}
-{quant_text}
-近期市场资讯：
-{news_summary}
-
-输出JSON数组，每个元素包含：
-fund_code, fund_name, recommendation(hold/sell/add), evidence(引用新闻中的具体语句), reason(简短理由)。
-
-请分析："""
+    holdings_data = load_json(HOLDINGS_FILE, {"holdings": [], "cash": 0})
+    holdings_list = holdings_data.get("holdings", [])
+    cash = holdings_data.get("cash", 0)
+    logger.info(f"加载持仓 {len(holdings_list)} 只基金，现金 {cash} 元")
+    
+    # 2. 更新基金净值（使用 AKShare）
+    try:
+        updated_holdings = update_fund_nav(holdings_list)
+        if updated_holdings:
+            holdings_list = updated_holdings
+            # 保存回 holdings.json（可选）
+            holdings_data["holdings"] = holdings_list
+            save_json(HOLDINGS_FILE, holdings_data)
+            logger.info("基金净值已更新")
+    except Exception as e:
+        logger.warning(f"更新净值失败: {e}")
+    
+    # 3. 获取市场风险等级
+    market_risk = get_market_risk_level()
+    logger.info(f"市场风险等级: {market_risk.get('level')}")
+    
+    # 4. 风控建议
+    risk_advice = get_risk_advice(holdings_list, cash, market_risk)
+    
+    # 5. 新闻抓取
+    sources = load_json(SOURCES_FILE, [])
+    if not sources:
+        # 默认 RSS 源
+        sources = [
+            "https://feeds.bloomberg.com/markets/news.rss",
+            "https://feeds.bloomberg.com/economics/news.rss",
+            "http://feeds.bbci.co.uk/news/business/rss.xml",
+            "https://www.wsj.com/xml/rss/3_7085.xml",
+            "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+        ]
+    logger.info(f"开始抓取 {len(sources)} 个 RSS 源")
+    news = fetch_all_news(sources)
+    logger.info(f"抓取到 {len(news)} 条新闻")
+    
+    # 6. AI 分析（仅在 recommend 模式下）
+    ai_result = {"recommendations": [], "raw_outputs": []}
+    if args.mode == "recommend" and (OPENROUTER_API_KEY or GITHUB_TOKEN):
+        news_text = "\n".join([f"{n['title']}: {n['summary'][:300]}" for n in news[:15]])
+        logger.info("调用 AI 模型进行分析...")
+        ai_result = get_ai_recommendations(news_text, holdings_list, market_risk)
+        logger.info(f"AI 分析完成，获得 {len(ai_result['recommendations'])} 条建议")
     else:
-        prompt = f"""你是一名投资顾问。根据以下市场资讯、量化数据和用户持仓，对每只基金给出操作建议(buy/sell/hold/add)。必须引用新闻原文作为证据。
-
-持仓：
-{holdings_text}
-{quant_text}
-市场资讯：
-{news_summary}
-
-输出JSON数组，每个元素包含：
-fund_code, fund_name, recommendation(buy/sell/hold/add), evidence(引用新闻中的具体语句), reason(简短理由)。
-
-请分析："""
-
-    # 8. 多模型投票
-    aggregated = multi_model_vote(prompt, valid_codes)
-
-    # 9. 记录AI建议（用于回测）
-    for rec in aggregated["final_recommendations"]:
-        nav = None
-        for h in holdings_list:
-            if h.get("fund_code") == rec["fund_code"]:
-                nav = h.get("current_nav")
-                break
-        record_ai_recommendation(
-            fund_code=rec["fund_code"],
-            fund_name=rec["fund_name"],
-            action=rec["recommendation"],
-            reason=rec["evidences"][0] if rec["evidences"] else "",
-            nav_at_time=nav,
-            amount_suggested=0
-        )
-
-    # 10. 生成报告
-    html = generate_html_report(aggregated, len(news), True, ANALYSIS_MODE, market_risk, risk_advice)
-    save_report(html)
-    logger.info("完成")
+        logger.info("跳过 AI 分析（hold 模式或缺少 API Key）")
+    
+    # 7. 生成 HTML 报告
+    html_content = generate_html_report(holdings_list, news, ai_result, market_risk, risk_advice, args.mode)
+    with open(REPORT_FILE, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    logger.info(f"报告已保存至 {REPORT_FILE}")
+    
+    # 8. 保存回测记录（推荐模式下记录 AI 建议）
+    if args.mode == "recommend" and ai_result['recommendations']:
+        os.makedirs(os.path.dirname(RECOMMENDATIONS_FILE), exist_ok=True)
+        # 加载已有记录
+        existing = load_json(RECOMMENDATIONS_FILE, [])
+        new_record = {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "recommendations": ai_result['recommendations'],
+            "market_risk": market_risk.get("level")
+        }
+        existing.append(new_record)
+        save_json(RECOMMENDATIONS_FILE, existing)
+        logger.info(f"回测记录已追加至 {RECOMMENDATIONS_FILE}")
+    else:
+        # 确保文件存在（即使为空）
+        if not os.path.exists(RECOMMENDATIONS_FILE):
+            save_json(RECOMMENDATIONS_FILE, [])
+            logger.info("创建空的回测记录文件")
+    
+    logger.info("任务完成")
 
 if __name__ == "__main__":
     main()
