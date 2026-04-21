@@ -2,8 +2,9 @@
     "https://rsshub.app/caixin/china",
     "https://rsshub.app/ft/china/economy",
     "https://rsshub.app/wsj/economy",
-    "https://rsshub.app/xueqiu/user/123456",
-    "https://rsshub.app/goldman-sachs/research",
     "https://rsshub.app/reuters/finance",
-    "https://rsshub.app/bloomberg/markets"
+    "https://feeds.bloomberg.com/markets/news.rss",
+    "https://www.ft.com/?format=rss",
+    "https://www.wsj.com/xml/rss/3_7085.xml",
+    "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml"
 ]
