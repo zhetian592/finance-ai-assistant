@@ -1,7 +1,4 @@
 {
-    "holdings": [
-        {"fund_code": "000001", "fund_name": "华夏成长混合", "amount": 10000, "cost": 1.25},
-        {"fund_code": "110022", "fund_name": "易方达消费行业", "amount": 20000, "cost": 3.45}
-    ],
-    "cash": 50000
+  "holdings": [],
+  "cash": 50000
 }
