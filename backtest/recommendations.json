@@ -82,5 +82,23 @@
       }
     ],
     "market_risk": "medium"
+  },
+  {
+    "date": "2026-04-22",
+    "recommendations": [
+      {
+        "code": "000011",
+        "name": "华夏大盘精选混合",
+        "amount": 15000,
+        "reason": "大盘蓝筹指数，估值相对合理，适合长期布局"
+      },
+      {
+        "code": "519069",
+        "name": "汇添富价值精选混合",
+        "amount": 35000,
+        "reason": "价值风格基金，兼顾成长与防御，适合当前市场"
+      }
+    ],
+    "market_risk": "medium"
   }
 ]
