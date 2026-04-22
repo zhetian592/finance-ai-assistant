@@ -58,5 +58,29 @@
       }
     ],
     "market_risk": "medium"
+  },
+  {
+    "date": "2026-04-22",
+    "recommendations": [
+      {
+        "code": "000001",
+        "name": "华夏大盘精选混合",
+        "suggest_shares": 16666,
+        "reason": "大盘蓝筹，稳健抗跌，适合当前市场"
+      },
+      {
+        "code": "000016",
+        "name": "华安中国强债债券",
+        "suggest_shares": 16666,
+        "reason": "债券基金，波动小，防御性强"
+      },
+      {
+        "code": "160415",
+        "name": "大成沪深300指数",
+        "suggest_shares": 16666,
+        "reason": "跟踪沪深300，分享市场收益"
+      }
+    ],
+    "market_risk": "medium"
   }
 ]
