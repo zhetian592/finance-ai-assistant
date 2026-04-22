@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-财经AI决策辅助工具 - 事件驱动版
-- 抓取 RSS 新闻 → 提取结构化事件（主题+情感） → 规则引擎推荐基金
-- 有持仓时：更新净值、市场风险、风控建议（不生成AI推荐）
-- 无持仓时：根据新闻事件推荐买入（真实代码、建议金额、明确理由）
+财经AI决策辅助工具 - 进阶版
+集成：增强事件提取 + 多因子模型 + 组合优化
+目标：接近职业基金经理分析能力
 """
 
 import os
@@ -14,15 +13,16 @@ import logging
 import requests
 import feedparser
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 量化模块
 from quant import get_market_risk_level, update_fund_nav, get_risk_advice
 
-# 事件驱动模块
-from event_extractor import extract_event
-from rule_engine import get_recommendations_by_events
+# 进阶模块
+from enhanced_event_extractor import extract_event
+from factor_model import FactorModel
+from portfolio_optimizer import PortfolioOptimizer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,8 +35,6 @@ HOLDINGS_FILE = "holdings.json"
 SOURCES_FILE = "fund_sources.json"
 REPORT_FILE = "fund_report.html"
 RECOMMENDATIONS_FILE = "backtest/recommendations.json"
-
-# 默认现金（若 holdings.json 未提供）
 DEFAULT_CASH = 50000
 
 # ==================== 辅助函数 ====================
@@ -55,7 +53,6 @@ def save_json(file_path: str, data: Any):
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-# ==================== 新闻抓取 ====================
 def fetch_rss_feed(url: str, timeout: int = 15) -> List[Dict]:
     try:
         feed = feedparser.parse(url)
@@ -80,7 +77,6 @@ def fetch_all_news(sources: List[str]) -> List[Dict]:
         for future in as_completed(future_to_url):
             entries = future.result()
             all_news.extend(entries)
-    # 去重（按标题）
     seen = set()
     unique = []
     for item in all_news:
@@ -90,9 +86,7 @@ def fetch_all_news(sources: List[str]) -> List[Dict]:
             unique.append(item)
     return unique
 
-# ==================== 报告生成 ====================
-def generate_html_report(holdings: List[Dict], news: List[Dict], recommendations: List[Dict],
-                         market_risk: Dict, risk_advice: str, mode: str, cash: float) -> str:
+def generate_html_report(holdings, news, recommendations, market_risk, risk_advice, mode, cash):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     risk_level = market_risk.get("level", "unknown")
     risk_color = {"high": "red", "medium": "orange", "low": "green"}.get(risk_level, "gray")
@@ -113,14 +107,11 @@ def generate_html_report(holdings: List[Dict], news: List[Dict], recommendations
         table {{ border-collapse: collapse; width: 100%; margin: 15px 0; }}
         th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
         th {{ background-color: #f2f2f2; }}
-        .buy {{ color: green; font-weight: bold; }}
-        .sell {{ color: red; font-weight: bold; }}
-        .hold {{ color: gray; }}
         .news-item {{ margin-bottom: 15px; padding: 10px; background: #f9f9f9; }}
     </style>
 </head>
 <body>
-    <h1>📊 财经AI决策报告</h1>
+    <h1>📊 财经AI决策报告（进阶版）</h1>
     <p>生成时间: {timestamp}</p>
     <p>运行模式: {mode}</p>
     <p>可用现金: {cash} 元</p>
@@ -141,29 +132,18 @@ def generate_html_report(holdings: List[Dict], news: List[Dict], recommendations
         <pre>{risk_advice}</pre>
     </div>
 """
-
     if is_empty:
-        # 无持仓：显示事件驱动推荐
-        html += "<h2>🌟 事件驱动基金推荐</h2>"
+        html += "<h2>🌟 多因子+组合优化推荐</h2>"
         if recommendations:
-            html += """
-            <table>
-                <tr><th>基金代码</th><th>基金名称</th><th>建议买入金额（元）</th><th>推荐理由</th></tr>
-            """
+            html += "<table><tr><th>基金代码</th><th>基金名称</th><th>建议买入金额（元）</th><th>推荐理由</th></tr>"
             for rec in recommendations:
-                code = rec.get('code', '')
-                name = rec.get('name', '')
-                amount = rec.get('amount', 0)
-                reason = rec.get('reason', '')
-                html += f"<tr><td>{code}</td><td>{name}</td><td>{amount}</td><td>{reason}</td></tr>"
+                html += f"<tr><td>{rec['code']}</td><td>{rec['name']}</td><td>{rec['amount']}</td><td>{rec['reason']}</td></tr>"
             html += "</table>"
-            html += f"<p>💡 建议使用现金 {cash} 元，按上述金额买入。可根据风险偏好调整。</p>"
+            html += f"<p>💡 建议使用现金 {cash} 元，按上述金额配置。组合已考虑市场风险等级{risk_level}。</p>"
         else:
-            html += "<p>⚠️ 未能从新闻中提取到有效投资信号，请稍后重试或手动选择基金。</p>"
+            html += "<p>⚠️ 未提取到有效投资信号，请稍后重试。</p>"
     else:
-        # 有持仓：显示持仓表格（无AI建议，仅显示当前持仓）
-        html += "<h2>💰 当前持仓</h2>"
-        html += "<table><tr><th>基金代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>浮动盈亏</th></tr>"
+        html += "<h2>💰 当前持仓</h2><table><tr><th>基金代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>浮动盈亏</th></tr>"
         for fund in holdings:
             code = fund.get('code', '')
             name = fund.get('name', '')
@@ -171,31 +151,25 @@ def generate_html_report(holdings: List[Dict], news: List[Dict], recommendations
             cost = fund.get('cost', 0)
             current = fund.get('current', 0)
             profit = (current - cost) * amount
-            profit_class = "color: green" if profit >= 0 else "color: red"
-            html += f"<tr><td>{code}</td><td>{name}</td><td>{amount}</td><td>{cost:.4f}</td><td>{current:.4f}</td><td style='{profit_class}'>{profit:+.2f}</td></tr>"
-        html += "</table>"
-        html += "<p>📌 注：有持仓时系统仅提供市场风控建议，不自动生成买卖指令。</p>"
-
+            profit_color = "green" if profit >= 0 else "red"
+            html += f"<tr><td>{code}</td><td>{name}</td><td>{amount}</td><td>{cost:.4f}</td><td>{current:.4f}</td><td style='color:{profit_color}'>{profit:+.2f}</td></tr>"
+        html += "</table><p>📌 有持仓时仅提供市场风控建议，不自动生成买卖指令。</p>"
+    
     html += "<h2>📰 近期财经新闻（事件驱动依据）</h2>"
     for item in news[:10]:
         title = item.get('title', '无标题')
         summary = item.get('summary', '')[:200]
         link = item.get('link', '#')
         html += f'<div class="news-item"><a href="{link}" target="_blank"><strong>{title}</strong></a><p>{summary}...</p></div>'
-    html += """
-</body>
-</html>
-"""
+    html += "</body></html>"
     return html
 
-# ==================== 主函数 ====================
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["recommend", "hold"], default="recommend",
-                        help="recommend: 无持仓时推荐; hold: 仅更新数据不推荐")
+    parser.add_argument("--mode", choices=["recommend", "hold"], default="recommend")
     args = parser.parse_args()
 
-    # 1. 加载持仓
+    # 加载持仓
     raw_data = load_json(HOLDINGS_FILE, {"holdings": [], "cash": DEFAULT_CASH})
     if isinstance(raw_data, list):
         holdings_list = raw_data
@@ -205,7 +179,7 @@ def main():
         cash = raw_data.get("cash", DEFAULT_CASH)
     logger.info(f"加载持仓 {len(holdings_list)} 只基金，现金 {cash} 元")
 
-    # 2. 更新基金净值（如果有持仓）
+    # 更新净值（如有持仓）
     if holdings_list:
         try:
             updated = update_fund_nav(holdings_list)
@@ -220,17 +194,14 @@ def main():
         except Exception as e:
             logger.warning(f"更新净值失败: {e}")
 
-    # 3. 获取市场风险等级
+    # 市场风险
     market_risk = get_market_risk_level()
     logger.info(f"市场风险等级: {market_risk.get('level')}")
-
-    # 4. 风控建议
     risk_advice = get_risk_advice(holdings_list, cash, market_risk)
 
-    # 5. 抓取新闻
+    # 抓取新闻
     sources = load_json(SOURCES_FILE, [])
     if not sources:
-        # 默认使用几个相对稳定的 RSS 源（可替换为国内镜像）
         sources = [
             "https://feeds.bloomberg.com/markets/news.rss",
             "https://feeds.bloomberg.com/economics/news.rss",
@@ -242,32 +213,35 @@ def main():
     news = fetch_all_news(sources)
     logger.info(f"抓取到 {len(news)} 条新闻")
 
-    # 6. 事件驱动推荐（仅当无持仓且模式为 recommend）
+    # 事件提取 + 多因子 + 组合优化
     recommendations = []
     if args.mode == "recommend" and not holdings_list:
-        logger.info("使用事件驱动规则引擎生成推荐...")
-        # 将新闻转换为结构化事件
+        logger.info("开始进阶分析：事件提取 -> 多因子评分 -> 组合优化")
         events = []
-        for item in news[:20]:  # 最多处理20条新闻
+        for item in news[:20]:
             evt = extract_event(item)
-            if evt["topics"]:   # 只保留有主题的事件
+            if evt["industries"]:
                 events.append(evt)
-        logger.info(f"提取到 {len(events)} 个结构化事件（含主题）")
+        logger.info(f"提取到 {len(events)} 个有效事件")
         if events:
-            recommendations = get_recommendations_by_events(events, cash, market_risk)
-            logger.info(f"规则引擎生成 {len(recommendations)} 条推荐")
+            factor = FactorModel()
+            top_industries = factor.recommend_industries(events, top_k=3)
+            logger.info(f"推荐行业: {top_industries}")
+            if top_industries:
+                recommendations = PortfolioOptimizer.allocate_cash(
+                    top_industries, cash, market_risk.get("level", "medium")
+                )
+                logger.info(f"生成 {len(recommendations)} 条配置建议")
         else:
-            logger.warning("未提取到任何有效事件，无法生成推荐")
-    else:
-        logger.info("跳过事件推荐（有持仓或非recommend模式）")
+            logger.warning("未提取到有效事件")
 
-    # 7. 生成 HTML 报告
+    # 生成报告
     html = generate_html_report(holdings_list, news, recommendations, market_risk, risk_advice, args.mode, cash)
     with open(REPORT_FILE, 'w', encoding='utf-8') as f:
         f.write(html)
     logger.info(f"报告已保存至 {REPORT_FILE}")
 
-    # 8. 保存回测记录（只保存规则引擎推荐，便于后续分析）
+    # 保存回测记录
     if args.mode == "recommend" and recommendations:
         os.makedirs(os.path.dirname(RECOMMENDATIONS_FILE), exist_ok=True)
         existing = load_json(RECOMMENDATIONS_FILE, [])
@@ -275,15 +249,14 @@ def main():
             "date": datetime.now().strftime("%Y-%m-%d"),
             "recommendations": recommendations,
             "market_risk": market_risk.get("level"),
-            "events_count": len([e for e in events if e.get("topics")]) if 'events' in locals() else 0
+            "events_used": len(events) if 'events' in locals() else 0
         }
         existing.append(new_record)
         save_json(RECOMMENDATIONS_FILE, existing)
-        logger.info(f"回测记录已追加至 {RECOMMENDATIONS_FILE}")
+        logger.info(f"回测记录已追加")
     else:
         if not os.path.exists(RECOMMENDATIONS_FILE):
             save_json(RECOMMENDATIONS_FILE, [])
-            logger.info("创建空回测记录")
 
     logger.info("任务完成")
 
