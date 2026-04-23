@@ -1,0 +1,52 @@
+{
+  "建筑材料": {
+    "code": "159745",
+    "name": "建材ETF国泰",
+    "min_daily_volume": 10000000
+  },
+  "银行": {
+    "code": "512800",
+    "name": "银行ETF华宝",
+    "min_daily_volume": 50000000
+  },
+  "电子": {
+    "code": "159997",
+    "name": "电子ETF",
+    "min_daily_volume": 100000000
+  },
+  "计算机": {
+    "code": "512720",
+    "name": "计算机ETF",
+    "min_daily_volume": 100000000
+  },
+  "医药生物": {
+    "code": "512010",
+    "name": "医药ETF",
+    "min_daily_volume": 100000000
+  },
+  "食品饮料": {
+    "code": "515170",
+    "name": "食品饮料ETF",
+    "min_daily_volume": 100000000
+  },
+  "电气设备": {
+    "code": "516880",
+    "name": "光伏ETF",
+    "min_daily_volume": 100000000
+  },
+  "汽车": {
+    "code": "516110",
+    "name": "汽车ETF",
+    "min_daily_volume": 80000000
+  },
+  "非银金融": {
+    "code": "512070",
+    "name": "证券保险ETF",
+    "min_daily_volume": 100000000
+  },
+  "机械设备": {
+    "code": "159886",
+    "name": "机械ETF",
+    "min_daily_volume": 50000000
+  }
+}
