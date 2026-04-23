@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-财经AI决策辅助工具 - 行业轮动版
+财经AI决策辅助工具 - 行业轮动版（最终优化版）
 - 抓取 RSS 新闻 → 提取结构化事件（主题+情感）
 - 获取申万一级行业的多因子数据（估值、资金流、动量、情绪）
-- 计算行业综合得分，生成ETF配置建议
+- 因子缺失时显示 N/A，综合得分仅计算有效因子
+- 引入估值陷阱折价（估值>80且动量<55时折价15%）
+- 仓位与市场风险等级挂钩（中等风险仓位上限50%）
+- 自动检测组合风格集中度并发出警告
 - 有持仓时：仅展示持仓盈亏和市场风控
 """
 
@@ -25,7 +28,7 @@ from event_extractor import extract_event
 
 # 行业轮动模块
 from data_fetcher import fetch_all_sector_data, SECTORS
-from sector_rotator import allocate_weights_by_score, generate_sector_report
+from sector_rotator import allocate_weights_by_score, generate_sector_report, generate_concentration_warning
 
 logging.basicConfig(
     level=logging.INFO,
@@ -96,7 +99,7 @@ def fetch_all_news(sources: List[str]) -> List[Dict]:
 def generate_html_report(holdings: List[Dict], news: List[Dict],
                          sector_df: Any, recommendations: List[Dict],
                          market_risk: Dict, risk_advice: str,
-                         mode: str, cash: float) -> str:
+                         mode: str, cash: float, concentration_warning: str = "") -> str:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     risk_level = market_risk.get("level", "unknown")
     risk_color = {"high": "red", "medium": "orange", "low": "green"}.get(risk_level, "gray")
@@ -118,13 +121,8 @@ def generate_html_report(holdings: List[Dict], news: List[Dict],
         table {{ border-collapse: collapse; width: 100%; margin: 15px 0; }}
         th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
         th {{ background-color: #f2f2f2; }}
-        .buy {{ color: green; font-weight: bold; }}
-        .sell {{ color: red; font-weight: bold; }}
-        .hold {{ color: gray; }}
         .news-item {{ margin-bottom: 15px; padding: 10px; background: #f9f9f9; }}
-        .score-high {{ background-color: #c8e6c9; }}
-        .score-mid {{ background-color: #fff9c4; }}
-        .score-low {{ background-color: #ffcdd2; }}
+        .warning {{ background-color: #fff3cd; border-left: 5px solid #ffc107; padding: 10px; margin: 10px 0; }}
     </style>
 </head>
 <body>
@@ -156,6 +154,8 @@ def generate_html_report(holdings: List[Dict], news: List[Dict],
             html += generate_sector_report(sector_df, top_n=8)
         if recommendations:
             html += "<h2>🌟 行业轮动基金推荐</h2>"
+            if concentration_warning:
+                html += f'<div class="warning">{concentration_warning}</div>'
             html += "<table><th>基金代码</th><th>行业/基金名称</th><th>建议买入金额（元）</th><th>推荐理由</th></tr>"
             for rec in recommendations:
                 code = rec.get('code', '')
@@ -164,7 +164,8 @@ def generate_html_report(holdings: List[Dict], news: List[Dict],
                 reason = rec.get('reason', '')
                 html += f"<tr><td>{code}</td><td>{name}</td><td>{amount}</td><td>{reason}</td></tr>"
             html += "</table>"
-            html += f"<p>💡 建议使用现金 {cash} 元，按上述金额买入。剩余现金保留为防御仓位。</p>"
+            total_invest = sum(r.get('amount',0) for r in recommendations)
+            html += f"<p>💡 实际买入总金额: {total_invest} 元（占现金 {total_invest/cash*100:.1f}%），剩余现金保留为防御仓位。</p>"
         else:
             html += "<p>⚠️ 未能生成有效的行业轮动推荐，请检查数据源或稍后重试。</p>"
     else:
@@ -237,7 +238,6 @@ def main():
     # 5. 抓取新闻
     sources = load_json(SOURCES_FILE, [])
     if not sources:
-        # 默认 RSS 源（可根据需要替换为国内稳定源）
         sources = [
             "https://feeds.bloomberg.com/markets/news.rss",
             "https://feeds.bloomberg.com/economics/news.rss",
@@ -260,6 +260,7 @@ def main():
     # 7. 行业轮动推荐（仅当无持仓且模式为 recommend）
     recommendations = []
     sector_df = None
+    concentration_warning = ""
     if args.mode == "recommend" and not holdings_list:
         logger.info("使用行业轮动多因子模型生成推荐...")
         sector_list = list(SECTORS.keys())
@@ -269,6 +270,8 @@ def main():
                 risk_level = market_risk.get("level", "medium")
                 recommendations = allocate_weights_by_score(sector_df, cash, top_n=3, risk_level=risk_level)
                 logger.info(f"行业轮动生成 {len(recommendations)} 条推荐")
+                # 生成集中度警告
+                concentration_warning = generate_concentration_warning(recommendations)
             else:
                 logger.warning("行业数据获取失败，无法生成推荐")
         except Exception as e:
@@ -285,7 +288,8 @@ def main():
         market_risk=market_risk,
         risk_advice=risk_advice,
         mode=args.mode,
-        cash=cash
+        cash=cash,
+        concentration_warning=concentration_warning
     )
     with open(REPORT_FILE, 'w', encoding='utf-8') as f:
         f.write(html)
