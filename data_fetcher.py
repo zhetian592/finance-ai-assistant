@@ -8,6 +8,7 @@ import atexit
 
 logger = logging.getLogger(__name__)
 
+# 申万一级行业 → baostock 指数代码（中证行业指数）
 SECTORS = {
     "农林牧渔": "sz.399110", "采掘": "sz.399120", "化工": "sz.399130",
     "钢铁": "sz.399140", "有色金属": "sz.399150", "电子": "sz.399160",
@@ -42,13 +43,12 @@ def _login_baostock():
 atexit.register(lambda: bs.logout() if _baostock_logged_in else None)
 
 # ------------------------------------------------------------
-# 估值因子
+# 估值因子（修复：PE 为 0 或数据不足时返回 None）
 # ------------------------------------------------------------
 def get_sector_valuation(sector_name: str, lookback_years: int = 5):
     try:
         code = SECTORS.get(sector_name)
         if not code:
-            logger.warning(f"{sector_name} 无对应指数代码")
             return None, False
         if not _login_baostock():
             return None, False
@@ -56,7 +56,6 @@ def get_sector_valuation(sector_name: str, lookback_years: int = 5):
         start = (datetime.now() - timedelta(days=lookback_years*365)).strftime('%Y-%m-%d')
         rs = bs.query_history_k_data_plus(code, "date,peTTM", start, end, "d", "3")
         if rs.error_code != '0':
-            logger.warning(f"{sector_name} 估值查询失败: {rs.error_msg}")
             return None, False
         data = []
         while rs.next():
@@ -67,14 +66,16 @@ def get_sector_valuation(sector_name: str, lookback_years: int = 5):
         df = pd.DataFrame(data, columns=rs.fields)
         df['peTTM'] = pd.to_numeric(df['peTTM'], errors='coerce')
         df = df.dropna()
-        if df.empty:
+        if df.empty or (df['peTTM'] == 0).all():
+            logger.warning(f"{sector_name} PE 数据全为0，估值因子无效")
             return None, False
         cur_pe = df.iloc[-1]['peTTM']
+        if cur_pe <= 0:
+            return None, False
         percentile = (df['peTTM'] < cur_pe).mean() * 100
         score = 100 - percentile
-        # 异常值警告
         if sector_name == "建筑材料" and score > 90:
-            logger.warning(f"⚠️ {sector_name} 估值得分 {score:.1f}，请注意水泥价格同比下跌、需求疲软的基本面风险")
+            logger.warning(f"⚠️ {sector_name} 估值得分 {score:.1f}，请注意基本面风险")
         logger.info(f"[估值] {sector_name}: PE={cur_pe:.2f}, 分位={percentile:.1f}%, 得分={score:.1f}")
         return score, True
     except Exception as e:
@@ -82,32 +83,14 @@ def get_sector_valuation(sector_name: str, lookback_years: int = 5):
         return None, False
 
 # ------------------------------------------------------------
-# 资金因子（北向资金行业流向）
+# 资金因子（接口已失效，直接返回 None）
 # ------------------------------------------------------------
 def get_sector_money_flow(sector_name: str):
-    try:
-        df = ak.stock_hsgt_industry_em()
-        if df is None or df.empty:
-            raise ValueError("Empty data from akshare")
-        # 模糊匹配行业名称
-        matched = df[df['行业'].str.contains(sector_name, na=False)]
-        if matched.empty:
-            # 尝试去除尾部"制造"等词
-            short = sector_name.replace("制造", "").replace("材料", "")
-            matched = df[df['行业'].str.contains(short, na=False)]
-        if matched.empty:
-            logger.debug(f"北向资金未找到行业 {sector_name}")
-            return None, False
-        net = matched['近5日净买额(万元)'].iloc[0] / 10000
-        score = np.clip((net + 20) / 40 * 100, 0, 100)
-        logger.info(f"[资金] {sector_name}: 净流入{net:.1f}亿, 得分={score:.1f}")
-        return score, True
-    except Exception as e:
-        logger.warning(f"北向资金接口失败 {sector_name}: {e}")
-        return None, False
+    logger.debug(f"北向资金接口已失效，跳过 {sector_name}")
+    return None, False
 
 # ------------------------------------------------------------
-# 动量因子（基于行业指数收盘价）
+# 动量因子（基于 baostock 行业指数收盘价，正常工作）
 # ------------------------------------------------------------
 def get_sector_momentum(sector_name: str, days: int = 20):
     try:
@@ -120,7 +103,6 @@ def get_sector_momentum(sector_name: str, days: int = 20):
         start = (datetime.now() - timedelta(days=days+10)).strftime('%Y-%m-%d')
         rs = bs.query_history_k_data_plus(code, "date,close", start, end, "d", "2")
         if rs.error_code != '0':
-            logger.warning(f"{sector_name} 动量查询失败: {rs.error_msg}")
             return None, False
         data = []
         while rs.next():
@@ -140,21 +122,21 @@ def get_sector_momentum(sector_name: str, days: int = 20):
         return None, False
 
 # ------------------------------------------------------------
-# 情绪因子（基于新闻事件）
+# 情绪因子（基于新闻事件，若无新闻返回 None）
 # ------------------------------------------------------------
 def get_sector_sentiment(sector_name: str, news_events: list):
     if not news_events:
         return None, False
-    # 扩展行业关键词映射（确保覆盖常见新闻主题）
+    # 行业关键词映射（简单版本，可扩展）
     sector_keywords = {
         "建筑材料": ["水泥", "玻璃", "建材", "基建", "地产开工"],
-        "银行": ["银行", "降息", "信贷", "不良", "股息", "LPR", "存款利率"],
+        "银行": ["银行", "降息", "信贷", "不良", "股息", "LPR"],
         "非银金融": ["券商", "保险", "信托", "证券", "资本市场"],
-        "电子": ["芯片", "半导体", "消费电子", "AI", "算力", "存储"],
-        "电气设备": ["新能源", "光伏", "风电", "电池", "电力", "电网"],
-        "汽车": ["汽车", "新能源车", "自动驾驶", "整车", "零部件"],
-        "食品饮料": ["白酒", "食品", "饮料", "消费", "调味品"],
-        "医药生物": ["医药", "生物", "疫苗", "创新药", "CXO", "医疗器械"],
+        "电子": ["芯片", "半导体", "消费电子", "AI", "算力"],
+        "电气设备": ["新能源", "光伏", "风电", "电池", "电力"],
+        "汽车": ["汽车", "新能源车", "自动驾驶", "整车"],
+        "食品饮料": ["白酒", "食品", "饮料", "消费"],
+        "医药生物": ["医药", "生物", "疫苗", "创新药", "CXO"],
     }
     keywords = sector_keywords.get(sector_name, [sector_name])
     scores = []
@@ -163,11 +145,11 @@ def get_sector_sentiment(sector_name: str, news_events: list):
         summary = evt.get('summary', '')
         text = (title + " " + summary).lower()
         if any(kw in text for kw in keywords):
-            sent = evt.get('sentiment', 'neutral')
+            sentiment = evt.get('sentiment', 'neutral')
             s = evt.get('sentiment_score', 0.5)
-            if sent == 'positive':
+            if sentiment == 'positive':
                 scores.append(s * 100)
-            elif sent == 'negative':
+            elif sentiment == 'negative':
                 scores.append((1 - s) * 100)
             else:
                 scores.append(50)
@@ -198,7 +180,7 @@ def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
         if sent_ok:
             valid_scores.append(sent)
         
-        # 有效因子数量不足2时，总分强制为50（避免单一因子驱动）
+        # 有效因子不足 2 个时总分强制为 50（避免单一因子驱动）
         if len(valid_scores) >= 2:
             total_score = np.mean(valid_scores)
         elif len(valid_scores) == 1:
