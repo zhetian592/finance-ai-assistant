@@ -1,11 +1,11 @@
 import re
+import logging
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
-import logging
 
 logger = logging.getLogger(__name__)
 
-# 加载 FinBERT 模型（英文，但对财经新闻有效）
+# 加载 FinBERT 模型（英文）
 try:
     tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
     model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
@@ -14,7 +14,7 @@ except Exception as e:
     logger.warning(f"FinBERT 加载失败: {e}，将使用规则匹配")
     FINBERT_AVAILABLE = False
 
-# 预定义行业/主题关键词（可扩展）
+# 行业/主题关键词（可扩展）
 TOPIC_KEYWORDS = {
     "新能源": ["新能源", "光伏", "风电", "电动车", "锂电池", "特斯拉"],
     "消费": ["消费", "零售", "白酒", "食品", "家电"],
@@ -50,16 +50,7 @@ def get_sentiment(text: str) -> dict:
     return {"label": labels[pred_idx], "score": float(scores[pred_idx])}
 
 def extract_event(news_item: dict) -> dict:
-    """
-    将单条新闻转换为结构化事件
-    返回: {
-        "title": str,
-        "summary": str,
-        "topics": list,
-        "sentiment": str,
-        "entities": list (预留)
-    }
-    """
+    """将单条新闻转换为结构化事件"""
     title = news_item.get("title", "")
     summary = news_item.get("summary", "")
     full_text = title + ". " + summary
