@@ -150,5 +150,30 @@
     ],
     "market_risk": "medium",
     "events_count": 15
+  },
+  {
+    "date": "2026-04-23",
+    "recommendations": [
+      {
+        "code": "159745",
+        "name": "建筑材料ETF(建材ETF)",
+        "amount": 11666,
+        "reason": "行业轮动：建筑材料 综合得分62.5（估值100，资金50，动量50，情绪50）"
+      },
+      {
+        "code": "512800",
+        "name": "银行ETF(银行ETF)",
+        "amount": 11666,
+        "reason": "行业轮动：银行 综合得分62.5（估值100，资金50，动量50，情绪50）"
+      },
+      {
+        "code": "512880",
+        "name": "非银金融ETF(证券ETF)",
+        "amount": 11666,
+        "reason": "行业轮动：非银金融 综合得分62.5（估值100，资金50，动量50，情绪50）"
+      }
+    ],
+    "market_risk": "medium",
+    "events_count": 0
   }
 ]
