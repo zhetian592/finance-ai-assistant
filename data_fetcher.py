@@ -48,6 +48,7 @@ def get_sector_valuation(sector_name: str, lookback_years: int = 5):
     try:
         code = SECTORS.get(sector_name)
         if not code:
+            logger.warning(f"{sector_name} 无对应指数代码")
             return None, False
         if not _login_baostock():
             return None, False
@@ -55,11 +56,13 @@ def get_sector_valuation(sector_name: str, lookback_years: int = 5):
         start = (datetime.now() - timedelta(days=lookback_years*365)).strftime('%Y-%m-%d')
         rs = bs.query_history_k_data_plus(code, "date,peTTM", start, end, "d", "3")
         if rs.error_code != '0':
+            logger.warning(f"{sector_name} 估值查询失败: {rs.error_msg}")
             return None, False
         data = []
         while rs.next():
             data.append(rs.get_row_data())
         if len(data) < 100:
+            logger.warning(f"{sector_name} 历史数据不足 {len(data)} 天")
             return None, False
         df = pd.DataFrame(data, columns=rs.fields)
         df['peTTM'] = pd.to_numeric(df['peTTM'], errors='coerce')
@@ -69,6 +72,9 @@ def get_sector_valuation(sector_name: str, lookback_years: int = 5):
         cur_pe = df.iloc[-1]['peTTM']
         percentile = (df['peTTM'] < cur_pe).mean() * 100
         score = 100 - percentile
+        # 异常值警告
+        if sector_name == "建筑材料" and score > 90:
+            logger.warning(f"⚠️ {sector_name} 估值得分 {score:.1f}，请注意水泥价格同比下跌、需求疲软的基本面风险")
         logger.info(f"[估值] {sector_name}: PE={cur_pe:.2f}, 分位={percentile:.1f}%, 得分={score:.1f}")
         return score, True
     except Exception as e:
@@ -76,11 +82,10 @@ def get_sector_valuation(sector_name: str, lookback_years: int = 5):
         return None, False
 
 # ------------------------------------------------------------
-# 资金因子（北向资金行业流向，带降级）
+# 资金因子（北向资金行业流向）
 # ------------------------------------------------------------
 def get_sector_money_flow(sector_name: str):
     try:
-        # 尝试获取北向资金行业数据
         df = ak.stock_hsgt_industry_em()
         if df is None or df.empty:
             raise ValueError("Empty data from akshare")
@@ -94,13 +99,11 @@ def get_sector_money_flow(sector_name: str):
             logger.debug(f"北向资金未找到行业 {sector_name}")
             return None, False
         net = matched['近5日净买额(万元)'].iloc[0] / 10000
-        # 线性映射到0~100分
         score = np.clip((net + 20) / 40 * 100, 0, 100)
         logger.info(f"[资金] {sector_name}: 净流入{net:.1f}亿, 得分={score:.1f}")
         return score, True
     except Exception as e:
-        logger.warning(f"北向资金接口失败 {sector_name}: {e}, 使用中性值")
-        # 降级：返回None，让该因子不计入总分
+        logger.warning(f"北向资金接口失败 {sector_name}: {e}")
         return None, False
 
 # ------------------------------------------------------------
@@ -117,6 +120,7 @@ def get_sector_momentum(sector_name: str, days: int = 20):
         start = (datetime.now() - timedelta(days=days+10)).strftime('%Y-%m-%d')
         rs = bs.query_history_k_data_plus(code, "date,close", start, end, "d", "2")
         if rs.error_code != '0':
+            logger.warning(f"{sector_name} 动量查询失败: {rs.error_msg}")
             return None, False
         data = []
         while rs.next():
@@ -127,9 +131,7 @@ def get_sector_momentum(sector_name: str, days: int = 20):
         df = pd.DataFrame(data, columns=rs.fields)
         df['close'] = pd.to_numeric(df['close'])
         df = df.sort_values('date')
-        # 计算收益率
         ret = (df['close'].iloc[-1] - df['close'].iloc[-days-1]) / df['close'].iloc[-days-1]
-        # 映射到0-100分（假设收益范围-10% ~ 20%）
         score = np.clip((ret + 0.1) / 0.3 * 100, 0, 100)
         logger.info(f"[动量] {sector_name}: {days}日收益{ret:.2%}, 得分={score:.1f}")
         return score, True
@@ -143,23 +145,23 @@ def get_sector_momentum(sector_name: str, days: int = 20):
 def get_sector_sentiment(sector_name: str, news_events: list):
     if not news_events:
         return None, False
-    # 建立行业关键词映射
+    # 扩展行业关键词映射（确保覆盖常见新闻主题）
     sector_keywords = {
-        "建筑材料": ["水泥", "玻璃", "建材", "基建"],
-        "银行": ["银行", "降息", "信贷", "不良", "股息"],
-        "非银金融": ["券商", "保险", "信托", "证券"],
-        "电子": ["芯片", "半导体", "消费电子", "AI"],
-        "电气设备": ["新能源", "光伏", "风电", "电池"],
-        "汽车": ["汽车", "新能源车", "自动驾驶"],
-        "食品饮料": ["白酒", "食品", "饮料", "消费"],
-        "医药生物": ["医药", "生物", "疫苗", "创新药"],
+        "建筑材料": ["水泥", "玻璃", "建材", "基建", "地产开工"],
+        "银行": ["银行", "降息", "信贷", "不良", "股息", "LPR", "存款利率"],
+        "非银金融": ["券商", "保险", "信托", "证券", "资本市场"],
+        "电子": ["芯片", "半导体", "消费电子", "AI", "算力", "存储"],
+        "电气设备": ["新能源", "光伏", "风电", "电池", "电力", "电网"],
+        "汽车": ["汽车", "新能源车", "自动驾驶", "整车", "零部件"],
+        "食品饮料": ["白酒", "食品", "饮料", "消费", "调味品"],
+        "医药生物": ["医药", "生物", "疫苗", "创新药", "CXO", "医疗器械"],
     }
     keywords = sector_keywords.get(sector_name, [sector_name])
     scores = []
     for evt in news_events:
         title = evt.get('title', '')
         summary = evt.get('summary', '')
-        text = title + " " + summary
+        text = (title + " " + summary).lower()
         if any(kw in text for kw in keywords):
             sent = evt.get('sentiment', 'neutral')
             s = evt.get('sentiment_score', 0.5)
@@ -186,7 +188,6 @@ def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
         mom, mom_ok = get_sector_momentum(sector)
         sent, sent_ok = get_sector_sentiment(sector, news_events)
         
-        # 收集有效得分
         valid_scores = []
         if val_ok:
             valid_scores.append(val)
@@ -197,12 +198,14 @@ def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
         if sent_ok:
             valid_scores.append(sent)
         
-        if valid_scores:
+        # 有效因子数量不足2时，总分强制为50（避免单一因子驱动）
+        if len(valid_scores) >= 2:
             total_score = np.mean(valid_scores)
-            effective_count = len(valid_scores)
+        elif len(valid_scores) == 1:
+            total_score = 50.0
+            logger.warning(f"{sector} 仅有一个有效因子({valid_scores[0]:.1f})，总分设为50")
         else:
-            total_score = 50.0  # 完全无数据时给中性，但这种情况极少
-            effective_count = 0
+            total_score = 50.0
         
         rows.append({
             "sector": sector,
@@ -211,9 +214,8 @@ def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
             "momentum_score": mom if mom_ok else None,
             "sentiment_score": sent if sent_ok else None,
             "total_score": total_score,
-            "effective_count": effective_count
+            "effective_count": len(valid_scores)
         })
     df = pd.DataFrame(rows)
-    # 按总分排序
     df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
     return df
