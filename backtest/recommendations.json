@@ -125,5 +125,30 @@
     ],
     "market_risk": "medium",
     "events_count": 16
+  },
+  {
+    "date": "2026-04-23",
+    "recommendations": [
+      {
+        "code": "",
+        "name": "建筑材料",
+        "amount": 11666,
+        "reason": "行业轮动：建筑材料 综合得分62.5（估值100，资金50，动量50，情绪50）"
+      },
+      {
+        "code": "",
+        "name": "轻工制造",
+        "amount": 11666,
+        "reason": "行业轮动：轻工制造 综合得分62.5（估值100，资金50，动量50，情绪50）"
+      },
+      {
+        "code": "",
+        "name": "银行",
+        "amount": 11666,
+        "reason": "行业轮动：银行 综合得分62.5（估值100，资金50，动量50，情绪50）"
+      }
+    ],
+    "market_risk": "medium",
+    "events_count": 15
   }
 ]
