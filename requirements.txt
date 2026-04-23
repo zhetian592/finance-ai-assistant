@@ -7,4 +7,3 @@ openai>=1.0.0
 tushare
 feedparser
 requests
-pip install openai>=1.0.0
