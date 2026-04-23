@@ -2,202 +2,178 @@ import akshare as ak
 import baostock as bs
 import pandas as pd
 import numpy as np
+import requests
+import feedparser
 import logging
+import time
+import os
+from functools import lru_cache
 from datetime import datetime, timedelta
-import atexit
 
 logger = logging.getLogger(__name__)
 
-# 申万一级行业 → baostock 指数代码（中证行业指数）
-SECTORS = {
-    "农林牧渔": "sz.399110", "采掘": "sz.399120", "化工": "sz.399130",
-    "钢铁": "sz.399140", "有色金属": "sz.399150", "电子": "sz.399160",
-    "家用电器": "sz.399170", "食品饮料": "sz.399180", "纺织服装": "sz.399190",
-    "医药生物": "sz.399200", "公用事业": "sz.399210", "交通运输": "sz.399220",
-    "房地产": "sz.399230", "商业贸易": "sz.399240", "休闲服务": "sz.399250",
-    "计算机": "sz.399260", "传媒": "sz.399270", "通信": "sz.399280",
-    "国防军工": "sz.399290", "银行": "sh.000134", "非银金融": "sz.399310",
-    "汽车": "sz.399320", "机械设备": "sz.399330", "建筑装饰": "sz.399340",
-    "电气设备": "sz.399350", "轻工制造": "sz.399360", "建筑材料": "sz.399370",
-    "综合": "sz.399380",
+# -------------------- Baostock 降级模块 --------------------
+_baostock_logged = False
+def _login_bs():
+    global _baostock_logged
+    if not _baostock_logged:
+        lg = bs.login()
+        if lg.error_code == '0':
+            _baostock_logged = True
+        else:
+            logger.error(f"baostock login fail: {lg.error_msg}")
+    return _baostock_logged
+
+def _logout_bs():
+    global _baostock_logged
+    if _baostock_logged:
+        bs.logout()
+        _baostock_logged = False
+
+import atexit
+atexit.register(_logout_bs)
+
+# 行业→中证指数映射（用于baostock估值）
+SECTOR_BAOSTOCK_MAP = {
+    '食品饮料': 'sh.000807',
+    '医药生物': 'sh.000808',
+    '银行': 'sh.000134',
+    '电子': 'sh.000066',
+    '计算机': 'sh.000068',
+    '建筑材料': 'sh.000150',
+    '轻工制造': 'sh.000159',
+    '非银金融': 'sh.000849',
+    '汽车': 'sh.000941',
+    '机械设备': 'sh.000109',
+    '电气设备': 'sh.000106',
 }
 
-_baostock_logged_in = False
+def get_sector_valuation_baostock(sector_name):
+    code = SECTOR_BAOSTOCK_MAP.get(sector_name)
+    if not code:
+        return None
+    _login_bs()
+    end = datetime.now().strftime('%Y-%m-%d')
+    start = (datetime.now() - timedelta(days=5*365)).strftime('%Y-%m-%d')
+    rs = bs.query_history_k_data_plus(code, "date,peTTM", start, end, "d", adjustflag="3")
+    if rs.error_code != '0':
+        return None
+    data = []
+    while rs.next():
+        data.append(rs.get_row_data())
+    if not data:
+        return None
+    df = pd.DataFrame(data, columns=['date','peTTM'])
+    df['peTTM'] = pd.to_numeric(df['peTTM'], errors='coerce')
+    df = df.dropna()
+    if df.empty:
+        return None
+    cur_pe = df.iloc[-1]['peTTM']
+    percentile = (df['peTTM'] < cur_pe).mean() * 100
+    return percentile
 
-def _login_baostock():
-    global _baostock_logged_in
-    if not _baostock_logged_in:
+# -------------------- 资金流（修复：用Tushare替代AKShare失效接口） --------------------
+try:
+    import tushare as ts
+    ts.set_token(os.getenv('TUSHARE_TOKEN'))
+    ts_pro = ts.pro_api()
+except:
+    ts_pro = None
+
+def get_sector_money_flow(sector_name):
+    """
+    获取行业资金流向。优先用Tushare moneyflow_ind_dc，若不可用则返回None。
+    """
+    if ts_pro is None:
+        logger.warning("Tushare不可用，跳过资金流")
+        return None
+    try:
+        # 需要映射行业名称到Tushare行业
+        mapping = {
+            '建筑材料': '建筑材料',
+            '银行': '银行',
+            '电子': '电子',
+            # ... 补全其他
+        }
+        ind = mapping.get(sector_name)
+        if not ind:
+            return None
+        df = ts_pro.moneyflow_ind_dc(trade_date=datetime.now().strftime('%Y%m%d'), industry=ind)
+        if df.empty:
+            return None
+        # 返回净流入（亿）
+        return df.iloc[0]['net_amount'] / 1e8
+    except Exception as e:
+        logger.error(f"资金流获取失败: {e}")
+        return None
+
+# -------------------- 新闻抓取（中英文混合） --------------------
+NEWS_SOURCES = [
+    ('https://rss.cnfol.com/finance.xml', '中文'),
+    ('https://www.cls.cn/api/sw?app=CailianpressWeb&os=web&sv=7.7.3', '中文'),  # 财联社接口示例
+    ('http://feeds.bbci.co.uk/news/business/rss.xml', '英文'),
+    # 其他源...
+]
+
+def fetch_news():
+    """返回 [(标题, 来源, 语言), ...]"""
+    headlines = []
+    for url, lang in NEWS_SOURCES:
         try:
-            lg = bs.login()
-            if lg.error_code == '0':
-                _baostock_logged_in = True
-                logger.info("Baostock login success")
+            if 'rss' in url or 'feed' in url:
+                feed = feedparser.parse(url)
+                for entry in feed.entries[:10]:
+                    headlines.append((entry.title, url, lang))
             else:
-                logger.error(f"Baostock login failed: {lg.error_msg}")
-                return False
-        except Exception as e:
-            logger.error(f"Baostock login exception: {e}")
-            return False
-    return True
+                # 简易json接口
+                resp = requests.get(url, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # 根据具体格式解析，此处略
+        except:
+            continue
+    return headlines
 
-atexit.register(lambda: bs.logout() if _baostock_logged_in else None)
-
-# ------------------------------------------------------------
-# 估值因子（修复：PE 为 0 或数据不足时返回 None）
-# ------------------------------------------------------------
-def get_sector_valuation(sector_name: str, lookback_years: int = 5):
-    try:
-        code = SECTORS.get(sector_name)
-        if not code:
-            return None, False
-        if not _login_baostock():
-            return None, False
-        end = datetime.now().strftime('%Y-%m-%d')
-        start = (datetime.now() - timedelta(days=lookback_years*365)).strftime('%Y-%m-%d')
-        rs = bs.query_history_k_data_plus(code, "date,peTTM", start, end, "d", "3")
-        if rs.error_code != '0':
-            return None, False
-        data = []
-        while rs.next():
-            data.append(rs.get_row_data())
-        if len(data) < 100:
-            logger.warning(f"{sector_name} 历史数据不足 {len(data)} 天")
-            return None, False
-        df = pd.DataFrame(data, columns=rs.fields)
-        df['peTTM'] = pd.to_numeric(df['peTTM'], errors='coerce')
-        df = df.dropna()
-        if df.empty or (df['peTTM'] == 0).all():
-            logger.warning(f"{sector_name} PE 数据全为0，估值因子无效")
-            return None, False
-        cur_pe = df.iloc[-1]['peTTM']
-        if cur_pe <= 0:
-            return None, False
-        percentile = (df['peTTM'] < cur_pe).mean() * 100
-        score = 100 - percentile
-        if sector_name == "建筑材料" and score > 90:
-            logger.warning(f"⚠️ {sector_name} 估值得分 {score:.1f}，请注意基本面风险")
-        logger.info(f"[估值] {sector_name}: PE={cur_pe:.2f}, 分位={percentile:.1f}%, 得分={score:.1f}")
-        return score, True
-    except Exception as e:
-        logger.warning(f"估值计算异常 {sector_name}: {e}")
-        return None, False
-
-# ------------------------------------------------------------
-# 资金因子（接口已失效，直接返回 None）
-# ------------------------------------------------------------
-def get_sector_money_flow(sector_name: str):
-    logger.debug(f"北向资金接口已失效，跳过 {sector_name}")
-    return None, False
-
-# ------------------------------------------------------------
-# 动量因子（基于 baostock 行业指数收盘价，正常工作）
-# ------------------------------------------------------------
-def get_sector_momentum(sector_name: str, days: int = 20):
-    try:
-        code = SECTORS.get(sector_name)
-        if not code:
-            return None, False
-        if not _login_baostock():
-            return None, False
-        end = datetime.now().strftime('%Y-%m-%d')
-        start = (datetime.now() - timedelta(days=days+10)).strftime('%Y-%m-%d')
-        rs = bs.query_history_k_data_plus(code, "date,close", start, end, "d", "2")
-        if rs.error_code != '0':
-            return None, False
-        data = []
-        while rs.next():
-            data.append(rs.get_row_data())
-        if len(data) < days+1:
-            logger.debug(f"{sector_name} 动量数据不足: 仅{len(data)}条")
-            return None, False
-        df = pd.DataFrame(data, columns=rs.fields)
-        df['close'] = pd.to_numeric(df['close'])
-        df = df.sort_values('date')
-        ret = (df['close'].iloc[-1] - df['close'].iloc[-days-1]) / df['close'].iloc[-days-1]
-        score = np.clip((ret + 0.1) / 0.3 * 100, 0, 100)
-        logger.info(f"[动量] {sector_name}: {days}日收益{ret:.2%}, 得分={score:.1f}")
-        return score, True
-    except Exception as e:
-        logger.warning(f"动量计算异常 {sector_name}: {e}")
-        return None, False
-
-# ------------------------------------------------------------
-# 情绪因子（基于新闻事件，若无新闻返回 None）
-# ------------------------------------------------------------
-def get_sector_sentiment(sector_name: str, news_events: list):
-    if not news_events:
-        return None, False
-    # 行业关键词映射（简单版本，可扩展）
-    sector_keywords = {
-        "建筑材料": ["水泥", "玻璃", "建材", "基建", "地产开工"],
-        "银行": ["银行", "降息", "信贷", "不良", "股息", "LPR"],
-        "非银金融": ["券商", "保险", "信托", "证券", "资本市场"],
-        "电子": ["芯片", "半导体", "消费电子", "AI", "算力"],
-        "电气设备": ["新能源", "光伏", "风电", "电池", "电力"],
-        "汽车": ["汽车", "新能源车", "自动驾驶", "整车"],
-        "食品饮料": ["白酒", "食品", "饮料", "消费"],
-        "医药生物": ["医药", "生物", "疫苗", "创新药", "CXO"],
-    }
-    keywords = sector_keywords.get(sector_name, [sector_name])
-    scores = []
-    for evt in news_events:
-        title = evt.get('title', '')
-        summary = evt.get('summary', '')
-        text = (title + " " + summary).lower()
-        if any(kw in text for kw in keywords):
-            sentiment = evt.get('sentiment', 'neutral')
-            s = evt.get('sentiment_score', 0.5)
-            if sentiment == 'positive':
-                scores.append(s * 100)
-            elif sentiment == 'negative':
-                scores.append((1 - s) * 100)
-            else:
-                scores.append(50)
-    if not scores:
-        return None, False
-    score = np.mean(scores)
-    logger.info(f"[情绪] {sector_name}: 相关新闻{len(scores)}条, 得分={score:.1f}")
-    return score, True
-
-# ------------------------------------------------------------
-# 综合数据获取
-# ------------------------------------------------------------
-def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
-    rows = []
-    for sector in sector_list:
-        val, val_ok = get_sector_valuation(sector)
-        money, money_ok = get_sector_money_flow(sector)
-        mom, mom_ok = get_sector_momentum(sector)
-        sent, sent_ok = get_sector_sentiment(sector, news_events)
-        
-        valid_scores = []
-        if val_ok:
-            valid_scores.append(val)
-        if money_ok:
-            valid_scores.append(money)
-        if mom_ok:
-            valid_scores.append(mom)
-        if sent_ok:
-            valid_scores.append(sent)
-        
-        # 有效因子不足 2 个时总分强制为 50（避免单一因子驱动）
-        if len(valid_scores) >= 2:
-            total_score = np.mean(valid_scores)
-        elif len(valid_scores) == 1:
-            total_score = 50.0
-            logger.warning(f"{sector} 仅有一个有效因子({valid_scores[0]:.1f})，总分设为50")
-        else:
-            total_score = 50.0
-        
-        rows.append({
-            "sector": sector,
-            "valuation_score": val if val_ok else None,
-            "money_flow_score": money if money_ok else None,
-            "momentum_score": mom if mom_ok else None,
-            "sentiment_score": sent if sent_ok else None,
-            "total_score": total_score,
-            "effective_count": len(valid_scores)
-        })
-    df = pd.DataFrame(rows)
-    df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
-    return df
+# -------------------- 统一数据获取入口 --------------------
+def fetch_all_sector_data():
+    """
+    返回 dict，包含每个行业的因子原始数据：
+        - valuation_percentile
+        - money_flow
+        - close_prices (用于动量)
+    """
+    # 先用akshare快速获取所有行业当日估值（如果可用），失败降级baostock
+    sectors = list(SECTOR_BAOSTOCK_MAP.keys())
+    result = {}
+    for sec in sectors:
+        # 估值
+        try:
+            df = ak.stock_sector_pe_ratio(sector=sec)  # 若接口存在
+            val_percentile = ...  # 计算分位
+        except:
+            val_percentile = get_sector_valuation_baostock(sec)
+        # 资金
+        money = get_sector_money_flow(sec)
+        # 价格（用于动量，可从baostock拉取近日收盘）
+        # 简化：从baostock获取最近30个交易日close
+        _login_bs()
+        code = SECTOR_BAOSTOCK_MAP.get(sec)
+        close_series = None
+        if code:
+            end = datetime.now().strftime('%Y-%m-%d')
+            start = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+            rs = bs.query_history_k_data_plus(code, "date,close", start, end, "d", adjustflag="2")
+            if rs.error_code == '0':
+                data = []
+                while rs.next():
+                    data.append(rs.get_row_data())
+                if data:
+                    df = pd.DataFrame(data, columns=['date','close'])
+                    df['close'] = pd.to_numeric(df['close'])
+                    close_series = df['close']
+        result[sec] = {
+            'val_percentile': val_percentile,
+            'money_flow': money if money is not None else 0,
+            'close': close_series
+        }
+    return result
