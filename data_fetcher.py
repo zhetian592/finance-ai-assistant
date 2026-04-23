@@ -26,25 +26,33 @@ _baostock_logged_in = False
 def _login_baostock():
     global _baostock_logged_in
     if not _baostock_logged_in:
-        lg = bs.login()
-        if lg.error_code == '0':
-            _baostock_logged_in = True
-            logger.info("Baostock login success")
-        else:
-            logger.error(f"Baostock login failed: {lg.error_msg}")
+        try:
+            lg = bs.login()
+            if lg.error_code == '0':
+                _baostock_logged_in = True
+                logger.info("Baostock login success")
+            else:
+                logger.error(f"Baostock login failed: {lg.error_msg}")
+                return False
+        except Exception as e:
+            logger.error(f"Baostock login exception: {e}")
             return False
     return True
 
 atexit.register(lambda: bs.logout() if _baostock_logged_in else None)
 
+# ------------------------------------------------------------
+# 估值因子
+# ------------------------------------------------------------
 def get_sector_valuation(sector_name: str, lookback_years: int = 5):
-    """返回 (得分, 有效标志)，若无法计算返回 (None, False)"""
-    code = SECTORS.get(sector_name)
-    if not code or not _login_baostock():
-        return None, False
-    end = datetime.now().strftime('%Y-%m-%d')
-    start = (datetime.now() - timedelta(days=lookback_years*365)).strftime('%Y-%m-%d')
     try:
+        code = SECTORS.get(sector_name)
+        if not code:
+            return None, False
+        if not _login_baostock():
+            return None, False
+        end = datetime.now().strftime('%Y-%m-%d')
+        start = (datetime.now() - timedelta(days=lookback_years*365)).strftime('%Y-%m-%d')
         rs = bs.query_history_k_data_plus(code, "date,peTTM", start, end, "d", "3")
         if rs.error_code != '0':
             return None, False
@@ -64,56 +72,95 @@ def get_sector_valuation(sector_name: str, lookback_years: int = 5):
         logger.info(f"[估值] {sector_name}: PE={cur_pe:.2f}, 分位={percentile:.1f}%, 得分={score:.1f}")
         return score, True
     except Exception as e:
-        logger.warning(f"估值计算失败 {sector_name}: {e}")
+        logger.warning(f"估值计算异常 {sector_name}: {e}")
         return None, False
 
+# ------------------------------------------------------------
+# 资金因子（北向资金行业流向，带降级）
+# ------------------------------------------------------------
 def get_sector_money_flow(sector_name: str):
     try:
+        # 尝试获取北向资金行业数据
         df = ak.stock_hsgt_industry_em()
-        if df.empty:
-            return None, False
+        if df is None or df.empty:
+            raise ValueError("Empty data from akshare")
+        # 模糊匹配行业名称
         matched = df[df['行业'].str.contains(sector_name, na=False)]
         if matched.empty:
+            # 尝试去除尾部"制造"等词
+            short = sector_name.replace("制造", "").replace("材料", "")
+            matched = df[df['行业'].str.contains(short, na=False)]
+        if matched.empty:
+            logger.debug(f"北向资金未找到行业 {sector_name}")
             return None, False
         net = matched['近5日净买额(万元)'].iloc[0] / 10000
+        # 线性映射到0~100分
         score = np.clip((net + 20) / 40 * 100, 0, 100)
         logger.info(f"[资金] {sector_name}: 净流入{net:.1f}亿, 得分={score:.1f}")
         return score, True
     except Exception as e:
-        logger.warning(f"资金接口失败 {sector_name}: {e}")
+        logger.warning(f"北向资金接口失败 {sector_name}: {e}, 使用中性值")
+        # 降级：返回None，让该因子不计入总分
         return None, False
 
+# ------------------------------------------------------------
+# 动量因子（基于行业指数收盘价）
+# ------------------------------------------------------------
 def get_sector_momentum(sector_name: str, days: int = 20):
-    code = SECTORS.get(sector_name)
-    if not code or not _login_baostock():
-        return None, False
-    end = datetime.now().strftime('%Y-%m-%d')
-    start = (datetime.now() - timedelta(days=days+5)).strftime('%Y-%m-%d')
     try:
+        code = SECTORS.get(sector_name)
+        if not code:
+            return None, False
+        if not _login_baostock():
+            return None, False
+        end = datetime.now().strftime('%Y-%m-%d')
+        start = (datetime.now() - timedelta(days=days+10)).strftime('%Y-%m-%d')
         rs = bs.query_history_k_data_plus(code, "date,close", start, end, "d", "2")
+        if rs.error_code != '0':
+            return None, False
         data = []
         while rs.next():
             data.append(rs.get_row_data())
         if len(data) < days+1:
+            logger.debug(f"{sector_name} 动量数据不足: 仅{len(data)}条")
             return None, False
         df = pd.DataFrame(data, columns=rs.fields)
         df['close'] = pd.to_numeric(df['close'])
         df = df.sort_values('date')
+        # 计算收益率
         ret = (df['close'].iloc[-1] - df['close'].iloc[-days-1]) / df['close'].iloc[-days-1]
+        # 映射到0-100分（假设收益范围-10% ~ 20%）
         score = np.clip((ret + 0.1) / 0.3 * 100, 0, 100)
         logger.info(f"[动量] {sector_name}: {days}日收益{ret:.2%}, 得分={score:.1f}")
         return score, True
     except Exception as e:
-        logger.warning(f"动量计算失败 {sector_name}: {e}")
+        logger.warning(f"动量计算异常 {sector_name}: {e}")
         return None, False
 
+# ------------------------------------------------------------
+# 情绪因子（基于新闻事件）
+# ------------------------------------------------------------
 def get_sector_sentiment(sector_name: str, news_events: list):
     if not news_events:
         return None, False
-    # 简化：根据新闻主题匹配行业
+    # 建立行业关键词映射
+    sector_keywords = {
+        "建筑材料": ["水泥", "玻璃", "建材", "基建"],
+        "银行": ["银行", "降息", "信贷", "不良", "股息"],
+        "非银金融": ["券商", "保险", "信托", "证券"],
+        "电子": ["芯片", "半导体", "消费电子", "AI"],
+        "电气设备": ["新能源", "光伏", "风电", "电池"],
+        "汽车": ["汽车", "新能源车", "自动驾驶"],
+        "食品饮料": ["白酒", "食品", "饮料", "消费"],
+        "医药生物": ["医药", "生物", "疫苗", "创新药"],
+    }
+    keywords = sector_keywords.get(sector_name, [sector_name])
     scores = []
     for evt in news_events:
-        if sector_name in evt.get('topics', []):
+        title = evt.get('title', '')
+        summary = evt.get('summary', '')
+        text = title + " " + summary
+        if any(kw in text for kw in keywords):
             sent = evt.get('sentiment', 'neutral')
             s = evt.get('sentiment_score', 0.5)
             if sent == 'positive':
@@ -128,8 +175,10 @@ def get_sector_sentiment(sector_name: str, news_events: list):
     logger.info(f"[情绪] {sector_name}: 相关新闻{len(scores)}条, 得分={score:.1f}")
     return score, True
 
+# ------------------------------------------------------------
+# 综合数据获取
+# ------------------------------------------------------------
 def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
-    """返回DataFrame，包含每个因子的得分和有效标志"""
     rows = []
     for sector in sector_list:
         val, val_ok = get_sector_valuation(sector)
@@ -137,22 +186,22 @@ def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
         mom, mom_ok = get_sector_momentum(sector)
         sent, sent_ok = get_sector_sentiment(sector, news_events)
         
-        # 有效因子列表及得分
-        scores = []
+        # 收集有效得分
+        valid_scores = []
         if val_ok:
-            scores.append(val)
+            valid_scores.append(val)
         if money_ok:
-            scores.append(money)
+            valid_scores.append(money)
         if mom_ok:
-            scores.append(mom)
+            valid_scores.append(mom)
         if sent_ok:
-            scores.append(sent)
+            valid_scores.append(sent)
         
-        if scores:
-            total_score = np.mean(scores)
-            effective_count = len(scores)
+        if valid_scores:
+            total_score = np.mean(valid_scores)
+            effective_count = len(valid_scores)
         else:
-            total_score = 50.0
+            total_score = 50.0  # 完全无数据时给中性，但这种情况极少
             effective_count = 0
         
         rows.append({
@@ -165,5 +214,6 @@ def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
             "effective_count": effective_count
         })
     df = pd.DataFrame(rows)
+    # 按总分排序
     df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
     return df
