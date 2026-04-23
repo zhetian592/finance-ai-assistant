@@ -1,5 +1,5 @@
-# 申万一级行业 → 最佳ETF代码及名称
-# 若无对应ETF，则标记为 None
+# 申万一级行业 → (ETF代码, ETF名称)
+# 若无对应ETF，则值为 (None, None)
 SECTOR_ETF_MAP = {
     "农林牧渔": ("159825", "农业ETF"),
     "采掘": ("510410", "资源ETF"),
@@ -9,12 +9,12 @@ SECTOR_ETF_MAP = {
     "电子": ("159997", "电子ETF"),
     "家用电器": ("159996", "家电ETF"),
     "食品饮料": ("515170", "食品饮料ETF"),
-    "纺织服装": (None, None),  # 无直接ETF
+    "纺织服装": (None, None),          # 无直接ETF
     "医药生物": ("512010", "医药ETF"),
     "公用事业": ("159611", "电力ETF"),
     "交通运输": ("159666", "交运ETF"),
     "房地产": ("512200", "房地产ETF"),
-    "商业贸易": (None, None),
+    "商业贸易": (None, None),          # 无直接ETF
     "休闲服务": ("159766", "旅游ETF"),
     "计算机": ("512720", "计算机ETF"),
     "传媒": ("512980", "传媒ETF"),
@@ -26,11 +26,11 @@ SECTOR_ETF_MAP = {
     "机械设备": ("516960", "机械ETF"),
     "建筑装饰": ("516970", "建筑ETF"),
     "电气设备": ("516880", "新能源ETF"),
-    "轻工制造": (None, None),  # 无直接ETF
+    "轻工制造": (None, None),          # 无直接ETF
     "建筑材料": ("159745", "建材ETF"),
-    "综合": (None, None),
+    "综合": (None, None),              # 无直接ETF
 }
 
 def get_etf_for_sector(sector: str):
-    """返回 (etf_code, etf_name)"""
+    """返回 (etf_code, etf_name) 元组"""
     return SECTOR_ETF_MAP.get(sector, (None, None))
