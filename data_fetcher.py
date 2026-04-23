@@ -1,139 +1,180 @@
 import akshare as ak
+import baostock as bs
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
 import logging
+import time
+from functools import lru_cache
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-# 申万一级行业列表（28个）及对应ETF代码（示例，可扩展）
+# -------------------- 行业配置 --------------------
+# 申万一级行业 → baostock 中证行业指数代码（部分映射，可扩展）
 SECTORS = {
-    "农林牧渔": "159825",
-    "采掘": "510410",
-    "化工": "516120",
-    "钢铁": "515210",
-    "有色金属": "512400",
-    "电子": "159997",
-    "家用电器": "159996",
-    "食品饮料": "515170",
-    "纺织服装": "512990",
-    "医药生物": "512010",
-    "公用事业": "159611",
-    "交通运输": "159666",
-    "房地产": "512200",
-    "商业贸易": "516960",
-    "休闲服务": "159766",
-    "计算机": "512720",
-    "传媒": "512980",
-    "通信": "515880",
-    "国防军工": "512710",
-    "银行": "512800",
-    "非银金融": "512880",
-    "汽车": "516110",
-    "机械设备": "516960",
-    "建筑装饰": "516970",
-    "电气设备": "516880",
-    "轻工制造": "159938",
-    "建筑材料": "516750",
-    "综合": "512990"
+    "农林牧渔": "sz.399110",
+    "采掘": "sz.399120",
+    "化工": "sz.399130",
+    "钢铁": "sz.399140",
+    "有色金属": "sz.399150",
+    "电子": "sz.399160",
+    "家用电器": "sz.399170",
+    "食品饮料": "sz.399180",
+    "纺织服装": "sz.399190",
+    "医药生物": "sz.399200",
+    "公用事业": "sz.399210",
+    "交通运输": "sz.399220",
+    "房地产": "sz.399230",
+    "商业贸易": "sz.399240",
+    "休闲服务": "sz.399250",
+    "计算机": "sz.399260",
+    "传媒": "sz.399270",
+    "通信": "sz.399280",
+    "国防军工": "sz.399290",
+    "银行": "sh.000134",
+    "非银金融": "sz.399310",
+    "汽车": "sz.399320",
+    "机械设备": "sz.399330",
+    "建筑装饰": "sz.399340",
+    "电气设备": "sz.399350",
+    "轻工制造": "sz.399360",
+    "建筑材料": "sz.399370",
+    "综合": "sz.399380",
 }
 
-def get_sector_pe_hist(sector_name: str, days: int = 250) -> pd.Series:
-    """获取行业指数历史PE（近days天），返回Series，索引为日期"""
-    # AKShare 暂无直接行业指数PE接口，使用行业指数日频数据估算
-    # 此处使用 wind 行业指数（如 "801010.SI" 对应农林牧渔）
-    # 简化：使用行业指数收盘价替代，真实场景需接入专业数据
-    # 返回随机模拟数据（仅供演示），实际应替换为真实接口
-    # TODO: 使用 tushare pro 或聚宽数据
-    end = datetime.now()
-    start = end - timedelta(days=days)
-    # 模拟：生成一个随机游走的PE序列
-    np.random.seed(hash(sector_name) % 10000)
-    pe = np.random.normal(20, 5, days).cumsum() + 30
-    dates = pd.date_range(start=end - timedelta(days=days-1), periods=days, freq='D')
-    return pd.Series(pe, index=dates)
+# -------------------- baostock 全局连接管理 --------------------
+_baostock_logged_in = False
 
-def get_sector_north_flow(sector_name: str) -> float:
-    """获取北向资金最近5日净流入（亿元）"""
+def _login_baostock():
+    global _baostock_logged_in
+    if not _baostock_logged_in:
+        lg = bs.login()
+        if lg.error_code == '0':
+            _baostock_logged_in = True
+            logger.info("Baostock login success")
+        else:
+            logger.error(f"Baostock login failed: {lg.error_msg}")
+            return False
+    return True
+
+def _logout_baostock():
+    global _baostock_logged_in
+    if _baostock_logged_in:
+        bs.logout()
+        _baostock_logged_in = False
+
+import atexit
+atexit.register(_logout_baostock)
+
+# -------------------- 估值因子（baostock 降级） --------------------
+def get_sector_valuation_baostock(sector_name: str, lookback_years: int = 3):
+    """使用 baostock 获取行业指数 PE-TTM 历史分位"""
+    code = SECTORS.get(sector_name)
+    if code is None:
+        return None
+    if not _login_baostock():
+        return None
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=lookback_years*365)).strftime('%Y-%m-%d')
+    rs = bs.query_history_k_data_plus(
+        code=code,
+        fields="date,peTTM",
+        start_date=start_date,
+        end_date=end_date,
+        frequency="d",
+        adjustflag="3"
+    )
+    if rs.error_code != '0':
+        logger.error(f"Baostock query error: {rs.error_msg}")
+        return None
+    data_list = []
+    while rs.next():
+        data_list.append(rs.get_row_data())
+    if not data_list:
+        return None
+    df = pd.DataFrame(data_list, columns=rs.fields)
+    df['peTTM'] = pd.to_numeric(df['peTTM'], errors='coerce')
+    df = df.dropna(subset=['peTTM'])
+    if df.empty:
+        return None
+    current_pe = df.iloc[-1]['peTTM']
+    percentile = (df['peTTM'] < current_pe).mean() * 100
+    # 估值得分 = 100 - 分位（越低越得分）
+    score = 100 - percentile
+    logger.info(f"[Baostock] {sector_name} 当前PE: {current_pe:.2f}, 历史分位: {percentile:.1f}%, 得分: {score:.1f}")
+    return score
+
+def get_sector_valuation(sector_name: str):
+    """优先 akshare，失败降级 baostock"""
     try:
-        # 北向资金行业流向接口（需较新akshare版本）
+        # 尝试 akshare 获取行业估值（需根据实际接口调整）
+        # 示例：ak.stock_sector_pe_ratio 可能不存在，这里直接使用 baostock 更稳定
+        # 为简化，直接使用 baostock
+        raise Exception("AKShare 接口不稳定，直接使用 baostock")
+    except Exception as e:
+        logger.debug(f"AKShare 估值获取失败: {e}, 降级 baostock")
+        return get_sector_valuation_baostock(sector_name)
+
+# -------------------- 资金流因子 --------------------
+def get_sector_money_flow(sector_name: str) -> float:
+    """获取北向资金近5日净流入（亿元），返回得分0~100"""
+    try:
         df = ak.stock_hsgt_industry_em()
         if df.empty:
-            return 0.0
-        # 根据行业名称匹配
-        row = df[df['行业'] == sector_name]
-        if not row.empty:
-            # 假设列名 '今日净买额(万元)' 或 '近5日净买额(万元)'
-            if '近5日净买额(万元)' in row.columns:
-                val = row['近5日净买额(万元)'].iloc[0]
-                return float(val) / 10000  # 转换为亿元
-        return 0.0
+            return 50.0
+        # 行业名称可能不完全匹配，做模糊匹配
+        row = df[df['行业'].str.contains(sector_name, na=False)]
+        if row.empty:
+            return 50.0
+        # 取近5日净买额（万元）转为亿元
+        net = row['近5日净买额(万元)'].iloc[0] / 10000
+        # 线性映射：净流入 >20亿 -> 100分，<-20亿 -> 0分
+        score = (net + 20) / 40 * 100
+        return np.clip(score, 0, 100)
     except Exception as e:
-        logger.warning(f"获取北向资金行业 {sector_name} 失败: {e}")
-        return 0.0
+        logger.warning(f"获取北向资金 {sector_name} 失败: {e}")
+        return 50.0
 
+# -------------------- 动量因子 --------------------
 def get_sector_momentum(sector_name: str, days: int = 20) -> float:
-    """获取行业指数最近days日收益率（%）"""
-    # 模拟实现：实际应使用行业指数历史行情
-    # 使用ak.stock_zh_index_hist_em? 行业指数代码映射复杂，先返回0
-    # 真实场景需维护行业指数代码映射表
-    # 这里返回随机值（仅框架）
-    np.random.seed(hash(sector_name + str(days)) % 10000)
-    return np.random.uniform(-5, 10)
-
-def get_sector_valuation_score(sector_name: str) -> float:
-    """
-    估值分位得分：基于当前PE在历史250日的位置，越低得分越高
-    返回0~100分，100表示极度低估
-    """
-    pe_hist = get_sector_pe_hist(sector_name)
-    if pe_hist.empty:
+    """获取行业指数最近 days 日收益率，返回得分0~100"""
+    code = SECTORS.get(sector_name)
+    if code is None:
         return 50.0
-    current_pe = pe_hist.iloc[-1]
-    percentile = (pe_hist < current_pe).mean() * 100
-    # 估值越低，得分越高：得分 = 100 - percentile
-    return max(0, min(100, 100 - percentile))
-
-def get_sector_money_flow_score(sector_name: str) -> float:
-    """资金流得分：基于北向资金净流入"""
-    net = get_sector_north_flow(sector_name)
-    # 净流入>10亿得100分，>5亿得70，>0得50，<0得20，<-10亿得0
-    if net >= 10:
-        return 100.0
-    elif net >= 5:
-        return 70.0
-    elif net >= 0:
+    if not _login_baostock():
         return 50.0
-    elif net >= -10:
-        return 20.0
-    else:
-        return 0.0
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=days+5)).strftime('%Y-%m-%d')
+    rs = bs.query_history_k_data_plus(
+        code=code,
+        fields="date,close",
+        start_date=start_date,
+        end_date=end_date,
+        frequency="d",
+        adjustflag="2"
+    )
+    data_list = []
+    while rs.next():
+        data_list.append(rs.get_row_data())
+    if len(data_list) < days+1:
+        return 50.0
+    df = pd.DataFrame(data_list, columns=rs.fields)
+    df['close'] = pd.to_numeric(df['close'])
+    df = df.sort_values('date')
+    ret = (df['close'].iloc[-1] - df['close'].iloc[-days-1]) / df['close'].iloc[-days-1]
+    # 假设收益率范围 -0.1 ~ 0.2，映射到0~100
+    score = (ret + 0.1) / 0.3 * 100
+    return np.clip(score, 0, 100)
 
-def get_sector_momentum_score(sector_name: str) -> float:
-    """动量得分：最近20日收益率，越高得分越高"""
-    ret = get_sector_momentum(sector_name, 20)
-    # 假设收益率范围 -10% ~ 20%，线性映射到0~100
-    score = (ret + 10) / 30 * 100
-    return max(0, min(100, score))
-
-def get_sector_sentiment_score(sector_name: str, news_events: list) -> float:
-    """
-    根据新闻事件（来自event_extractor）计算行业情绪得分
-    news_events: list of dict with keys ['topics', 'sentiment', 'sentiment_score']
-    """
+# -------------------- 情绪因子（基于新闻事件） --------------------
+def get_sector_sentiment(sector_name: str, news_events: list) -> float:
+    """根据新闻事件计算行业情绪得分"""
     if not news_events:
         return 50.0
-    # 找到与当前行业相关的事件
     scores = []
     for evt in news_events:
         topics = evt.get('topics', [])
-        # 检查行业名称是否与主题匹配（简单关键词匹配）
-        matched = False
-        for topic in topics:
-            if topic in sector_name or sector_name in topic:
-                matched = True
-                break
-        if matched:
+        if any(topic in sector_name or sector_name in topic for topic in topics):
             sentiment = evt.get('sentiment', 'neutral')
             sent_score = evt.get('sentiment_score', 0.5)
             if sentiment == 'positive':
@@ -146,25 +187,27 @@ def get_sector_sentiment_score(sector_name: str, news_events: list) -> float:
         return 50.0
     return np.mean(scores)
 
+# -------------------- 综合数据获取 --------------------
 def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
-    """获取所有行业的多因子数据，返回DataFrame"""
+    """获取所有行业的多因子数据，返回 DataFrame"""
     data = []
     for sector in sector_list:
-        pe_score = get_sector_valuation_score(sector)
-        flow_score = get_sector_money_flow_score(sector)
-        mom_score = get_sector_momentum_score(sector)
-        sent_score = get_sector_sentiment_score(sector, news_events)
-        # 综合得分（等权，可配置）
-        total_score = (pe_score + flow_score + mom_score + sent_score) / 4
+        val_score = get_sector_valuation(sector)
+        if val_score is None:
+            val_score = 50.0
+        money_score = get_sector_money_flow(sector)
+        mom_score = get_sector_momentum(sector)
+        sent_score = get_sector_sentiment(sector, news_events)
+        total_score = (val_score + money_score + mom_score + sent_score) / 4
         data.append({
             "sector": sector,
-            "etf_code": SECTORS.get(sector, ""),
-            "valuation_score": pe_score,
-            "money_flow_score": flow_score,
+            "etf_code": "",  # 可后续映射真实ETF代码
+            "valuation_score": val_score,
+            "money_flow_score": money_score,
             "momentum_score": mom_score,
             "sentiment_score": sent_score,
             "total_score": total_score
         })
     df = pd.DataFrame(data)
-    df = df.sort_values("total_score", ascending=False)
+    df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
     return df
