@@ -170,7 +170,7 @@ def generate_html_report(holdings: List[Dict], news: List[Dict],
     else:
         # 有持仓：显示持仓盈亏表
         html += "<h2>💰 当前持仓</h2>"
-        html += "<tr><th>基金代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>浮动盈亏</th></tr>"
+        html += "<table><th>基金代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>浮动盈亏</th></tr>"
         for fund in holdings:
             code = fund.get('code', '')
             name = fund.get('name', '')
