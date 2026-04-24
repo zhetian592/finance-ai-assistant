@@ -42,7 +42,9 @@ def _login_baostock():
 
 atexit.register(lambda: bs.logout() if _baostock_logged_in else None)
 
+# ------------------------------------------------------------
 # 估值因子（数据不足或PE异常时返回 None）
+# ------------------------------------------------------------
 def get_sector_valuation(sector_name: str, lookback_years: int = 5):
     code = SECTORS.get(sector_name)
     if not code:
@@ -78,12 +80,16 @@ def get_sector_valuation(sector_name: str, lookback_years: int = 5):
         logger.warning(f"估值计算异常 {sector_name}: {e}")
         return None, False
 
-# 资金因子（接口失效，直接返回 None）
+# ------------------------------------------------------------
+# 资金因子（接口暂时失效，返回 None）
+# ------------------------------------------------------------
 def get_sector_money_flow(sector_name: str):
     logger.debug(f"北向资金接口已失效，跳过 {sector_name}")
     return None, False
 
-# 动量因子（基于收盘价）
+# ------------------------------------------------------------
+# 动量因子（基于 baostock 收盘价）
+# ------------------------------------------------------------
 def get_sector_momentum(sector_name: str, days: int = 20):
     code = SECTORS.get(sector_name)
     if not code:
@@ -112,7 +118,9 @@ def get_sector_momentum(sector_name: str, days: int = 20):
         logger.warning(f"动量计算异常 {sector_name}: {e}")
         return None, False
 
-# 情绪因子（基于简单规则）
+# ------------------------------------------------------------
+# 情绪因子（基于简单规则，若无新闻返回 None）
+# ------------------------------------------------------------
 def get_sector_sentiment(sector_name: str, news_events: list):
     if not news_events:
         return None, False
@@ -142,7 +150,9 @@ def get_sector_sentiment(sector_name: str, news_events: list):
     logger.info(f"[情绪] {sector_name}: 相关新闻{len(scores)}条, 得分={score:.1f}")
     return score, True
 
-# 综合数据获取
+# ------------------------------------------------------------
+# 综合数据获取（优化评分逻辑）
+# ------------------------------------------------------------
 def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
     rows = []
     for sector in sector_list:
@@ -150,7 +160,7 @@ def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
         money, money_ok = get_sector_money_flow(sector)
         mom, mom_ok = get_sector_momentum(sector)
         sent, sent_ok = get_sector_sentiment(sector, news_events)
-        
+
         valid_scores = []
         if val_ok:
             valid_scores.append(val)
@@ -160,15 +170,19 @@ def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
             valid_scores.append(mom)
         if sent_ok:
             valid_scores.append(sent)
-        
+
+        # 优化：有效因子不足2个时，不再强制设为50，而是直接使用唯一有效因子（如果有）
         if len(valid_scores) >= 2:
             total_score = np.mean(valid_scores)
+            quality = "good"
         elif len(valid_scores) == 1:
-            total_score = 50.0
-            logger.warning(f"{sector} 仅有一个有效因子({valid_scores[0]:.1f})，总分设为50")
+            total_score = valid_scores[0]
+            quality = "single_factor"
+            logger.info(f"{sector} 仅有一个有效因子({valid_scores[0]:.1f})，直接使用")
         else:
             total_score = 50.0
-        
+            quality = "none"
+
         rows.append({
             "sector": sector,
             "valuation_score": val if val_ok else None,
@@ -176,7 +190,8 @@ def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
             "momentum_score": mom if mom_ok else None,
             "sentiment_score": sent if sent_ok else None,
             "total_score": total_score,
-            "effective_count": len(valid_scores)
+            "effective_count": len(valid_scores),
+            "quality": quality
         })
     df = pd.DataFrame(rows)
     df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
