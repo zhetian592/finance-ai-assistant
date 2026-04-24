@@ -5,43 +5,34 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-PRIMARY_MODEL = "glm-4-flash"
-SECONDARY_MODEL = "deepseek-chat"
+# 使用 GitHub Models，免费稳定
+PRIMARY_MODEL = "gpt-4o-mini"           # 或 "meta-llama-3.1-8b-instruct"
+SECONDARY_MODEL = "meta-llama-3.1-8b-instruct"
 
 _clients = {}
 
 def _get_clients():
     if not _clients:
-        zhipu_key = os.getenv("ZHIPU_API_KEY")
-        deepseek_key = os.getenv("DEEPSEEK_API_KEY")
-
-        if not zhipu_key and not deepseek_key:
-            logger.error("ZHIPU_API_KEY 和 DEEPSEEK_API_KEY 均未设置！情感分析将退回中性值。")
+        token = os.getenv("GH_MODELS_TOKEN")
+        if not token:
+            logger.warning("GH_MODELS_TOKEN 未设置")
             return None
 
-        if zhipu_key:
-            _clients["primary"] = OpenAI(
-                api_key=zhipu_key,
-                base_url="https://open.bigmodel.cn/api/paas/v4/"
-            )
-        if deepseek_key:
-            _clients["secondary"] = OpenAI(
-                api_key=deepseek_key,
-                base_url="https://api.deepseek.com/v1"
-            )
-    return _clients if _clients else None
+        _clients["primary"] = OpenAI(
+            api_key=token,
+            base_url="https://models.inference.ai.azure.com"
+        )
+        _clients["secondary"] = _clients["primary"]  # 备用也用同一个，避免无密钥
+
+    return _clients
 
 def llm_chat(messages, temperature=0.3, max_tokens=2048, prefer_primary=True):
-    """
-    主备自动切换。返回 (content, model_used)。
-    如果所有模型都不可用，返回 (None, None)。
-    """
     clients = _get_clients()
     if clients is None:
         return None, None
 
     candidates = [
-        ("primary", PRIMARY_MODEL, clients.get("primary")),
+        ("primary", PRIMARY_MODEL, clients["primary"]),
         ("secondary", SECONDARY_MODEL, clients.get("secondary"))
     ] if prefer_primary else [
         ("secondary", SECONDARY_MODEL, clients.get("secondary")),
@@ -70,6 +61,5 @@ def llm_chat(messages, temperature=0.3, max_tokens=2048, prefer_primary=True):
                     time.sleep(1 + attempt)
                 else:
                     break
-
     logger.error(f"所有模型调用失败，最后错误: {last_err}")
     return None, None
