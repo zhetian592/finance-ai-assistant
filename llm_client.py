@@ -12,35 +12,48 @@ _clients = {}
 
 def _get_clients():
     if not _clients:
-        _clients["primary"] = OpenAI(
-            api_key=os.getenv("ZHIPU_API_KEY"),
-            base_url="https://open.bigmodel.cn/api/paas/v4/"
-        )
-        _clients["secondary"] = OpenAI(
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
-            base_url="https://api.deepseek.com/v1"
-        )
-    return _clients
+        zhipu_key = os.getenv("ZHIPU_API_KEY")
+        deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+
+        if not zhipu_key and not deepseek_key:
+            logger.error("ZHIPU_API_KEY 和 DEEPSEEK_API_KEY 均未设置！情感分析将退回中性值。")
+            return None
+
+        if zhipu_key:
+            _clients["primary"] = OpenAI(
+                api_key=zhipu_key,
+                base_url="https://open.bigmodel.cn/api/paas/v4/"
+            )
+        if deepseek_key:
+            _clients["secondary"] = OpenAI(
+                api_key=deepseek_key,
+                base_url="https://api.deepseek.com/v1"
+            )
+    return _clients if _clients else None
 
 def llm_chat(messages, temperature=0.3, max_tokens=2048, prefer_primary=True):
     """
-    主备模型自动切换。优先调用 primary (glm-4-flash)，失败则切换 secondary (deepseek-chat)。
-    返回 (content: str, model_used: str)
+    主备自动切换。返回 (content, model_used)。
+    如果所有模型都不可用，返回 (None, None)。
     """
     clients = _get_clients()
+    if clients is None:
+        return None, None
+
     candidates = [
-        ("primary", PRIMARY_MODEL, clients["primary"]),
-        ("secondary", SECONDARY_MODEL, clients["secondary"])
+        ("primary", PRIMARY_MODEL, clients.get("primary")),
+        ("secondary", SECONDARY_MODEL, clients.get("secondary"))
     ] if prefer_primary else [
-        ("secondary", SECONDARY_MODEL, clients["secondary"]),
-        ("primary", PRIMARY_MODEL, clients["primary"])
+        ("secondary", SECONDARY_MODEL, clients.get("secondary")),
+        ("primary", PRIMARY_MODEL, clients.get("primary"))
     ]
 
     last_err = None
     for role, model_name, client in candidates:
+        if client is None:
+            continue
         for attempt in range(3):
             try:
-                logger.debug(f"尝试调用 {model_name}，第{attempt+1}次")
                 resp = client.chat.completions.create(
                     model=model_name,
                     messages=messages,
@@ -51,10 +64,12 @@ def llm_chat(messages, temperature=0.3, max_tokens=2048, prefer_primary=True):
                 logger.info(f"{model_name} 调用成功")
                 return content, model_name
             except Exception as e:
-                logger.warning(f"{model_name} 调用失败: {e}")
+                logger.warning(f"{model_name} 第{attempt+1}次失败: {e}")
                 last_err = e
                 if "rate" in str(e).lower():
                     time.sleep(1 + attempt)
                 else:
-                    break   # 非限流错误直接切换
-    raise RuntimeError(f"所有模型调用失败，最后错误: {last_err}")
+                    break
+
+    logger.error(f"所有模型调用失败，最后错误: {last_err}")
+    return None, None
