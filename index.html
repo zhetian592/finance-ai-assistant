@@ -340,7 +340,7 @@
         }
         let totalValue = cash;
         let totalCost = cash;
-        let html = `<table><thead><tr><th>代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>市值</th><th>浮动盈亏</th><th>操作</th></tr></thead><tbody>`;
+        let html = `</table><thead><tr><th>代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>市值</th><th>浮动盈亏</th><th>操作</th></tr></thead><tbody>`;
         for (const h of holdings) {
             const cur = h.current || h.cost;
             const marketVal = h.amount * cur;
@@ -368,7 +368,7 @@
             <td style="color:${totalProfit>=0?'green':'red'}">${totalProfit.toFixed(2)} (${totalProfitPercent.toFixed(2)}%)</td>
             <td></td>
         </tr>`;
-        html += `</tbody><tr>`;
+        html += `</tbody></table>`;
         document.getElementById('holdings-table').innerHTML = html;
     }
 
@@ -420,12 +420,11 @@
         }
     });
 
-    // ==================== 触发工作流（不传inputs） ====================
+    // ==================== 触发工作流 ====================
     async function triggerWorkflow() {
         const btn = document.getElementById('trigger-workflow-btn');
         const statusDiv = document.getElementById('trigger-status');
         if (!statusDiv) {
-            // 动态创建一个临时显示区域
             const tempDiv = document.createElement('div');
             tempDiv.id = 'trigger-status';
             tempDiv.style.marginTop = '8px';
@@ -465,19 +464,26 @@
             const res = await fetch('report_version.json?t=' + Date.now());
             if (!res.ok) return;
             const data = await res.json();
-            document.getElementById('report-time').innerText = new Date(data.last_updated).toLocaleString();
-            if (currentVersion === null) currentVersion = data.version;
-            else if (currentVersion !== data.version) {
-                document.getElementById('new-report-alert').style.display = 'flex';
+            const updateElem = document.getElementById('report-time');
+            if (updateElem) updateElem.innerText = new Date(data.last_updated).toLocaleString();
+            if (currentVersion === null) {
+                currentVersion = data.version;
+            } else if (currentVersion !== data.version) {
+                // 显示新报告提醒（也可以自动刷新，这里选择提醒）
+                const alertDiv = document.getElementById('new-report-alert');
+                if (alertDiv) alertDiv.style.display = 'flex';
                 currentVersion = data.version;
             }
-        } catch(e) { console.warn(e); }
+        } catch(e) { console.warn('版本检测失败', e); }
     }
 
     function refreshReport() {
         const iframe = document.getElementById('report-iframe');
-        iframe.src = iframe.src.split('?')[0] + '?t=' + Date.now();
-        document.getElementById('new-report-alert').style.display = 'none';
+        if (iframe) {
+            iframe.src = iframe.src.split('?')[0] + '?t=' + Date.now();
+        }
+        const alertDiv = document.getElementById('new-report-alert');
+        if (alertDiv) alertDiv.style.display = 'none';
         fetchVersion();
     }
 
