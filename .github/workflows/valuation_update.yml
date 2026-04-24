@@ -1,0 +1,39 @@
+name: Weekly Valuation Update
+
+on:
+  schedule:
+    # 每周一 02:00 UTC 运行（北京时间 10:00）
+    - cron: '0 2 * * 1'
+  workflow_dispatch:   # 允许手动触发
+
+jobs:
+  update-valuation:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 允许提交文件
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy akshare
+
+      - name: Run valuation crawler
+        run: python valuation_crawler.py
+
+      - name: Commit updated valuation.csv
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/valuation.csv
+          git diff --cached --quiet || git commit -m "chore: update industry valuation data [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}
