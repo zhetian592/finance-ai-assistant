@@ -266,7 +266,7 @@
             }
             let totalValue = cash;
             let totalCost = cash;
-            let html = `<table><thead><tr><th>代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>市值</th><th>浮动盈亏</th><th>操作</th></tr></thead><tbody>`;
+            let html = `<tr><thead><tr><th>代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>市值</th><th>浮动盈亏</th><th>操作</th></tr></thead><tbody>`;
             for (const h of holdings) {
                 const cur = h.current || h.cost;
                 const marketVal = h.amount * cur;
@@ -298,7 +298,7 @@
             document.getElementById('holdings-table').innerHTML = html;
         }
         
-        async function deleteHolding(code) {
+        window.deleteHolding = async function(code) {
             if (!confirm(`确定删除基金 ${code} 吗？`)) return;
             try {
                 const { holdings, cash, sha } = await fetchHoldingsFromGitHub();
@@ -311,7 +311,7 @@
             } catch (err) {
                 showMessage('error', `删除失败: ${err.message}`);
             }
-        }
+        };
         
         document.getElementById('holding-form').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -346,7 +346,7 @@
             }
         });
         
-        // ==================== 触发工作流 ====================
+        // ==================== 触发工作流（修正：不传递 inputs） ====================
         async function triggerWorkflow() {
             const btn = document.getElementById('trigger-btn');
             const statusDiv = document.getElementById('trigger-status');
@@ -361,7 +361,7 @@
                         'Content-Type': 'application/json',
                         'Accept': 'application/vnd.github.v3+json'
                     },
-                    body: JSON.stringify({ ref: BRANCH, inputs: { mode: 'recommend' } })
+                    body: JSON.stringify({ ref: BRANCH })   // 只传分支，不传 inputs，避免 "Unexpected inputs"
                 });
                 if (!response.ok) {
                     const err = await response.json();
