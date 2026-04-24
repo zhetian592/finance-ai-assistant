@@ -43,13 +43,13 @@ def get_sector_valuation(sector_name: str):
     if percentile is not None:
         return percentile
 
-    # 2. akshare（网络可能不稳）
+    # 2. akshare
     logger.warning(f"{sector_name} baostock失败，尝试akshare")
     percentile = _get_valuation_from_akshare(sector_name)
     if percentile is not None:
         return percentile
 
-    # 3. 本地价格分位兜底（永不失效）
+    # 3. 本地价格分位兜底
     logger.warning(f"{sector_name} 所有网络源失败，启动本地价格评估")
     percentile = _get_valuation_from_local_price(sector_name)
     if percentile is not None:
@@ -109,13 +109,12 @@ def _get_valuation_from_akshare(sector_name: str):
         return None
 
 def _get_valuation_from_local_price(sector_name: str):
-    """终极本地兜底：用近3年价格分位推断估值"""
     close = get_sector_close_series(sector_name, days=750)
     if close is None or len(close) < 250:
         return None
     cur_price = close.iloc[-1]
     price_pct = (close < cur_price).mean() * 100
-    # 价格分位高 → 价格在高位 → 估值可能偏高 → 估值得分低
+    # 价格分位越高，估值越贵，对应估值得分越低（返回高百分位）
     valuation_pct = 100 - price_pct
     logger.info(f"[Local] {sector_name} 价格分位: {price_pct:.2f}% → 估算估值分位: {valuation_pct:.2f}%")
     return valuation_pct
