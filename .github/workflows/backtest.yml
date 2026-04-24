@@ -1,31 +1,33 @@
-name: Backtest
+name: 回测验证
 
 on:
-  schedule:
-    - cron: '0 1 * * 1'   # 每周一 UTC 1:00 运行
   workflow_dispatch:
 
 jobs:
-  run:
+  backtest:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Python
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          
-      - name: Install dependencies
+
+      - name: 安装依赖
         run: |
-          pip install --upgrade pip
-          pip install akshare pandas numpy
-          
-      - name: Run backtest
-        run: python -c "from backtest import calculate_performance; print(calculate_performance())"
-        
-      - name: Commit backtest results
-        uses: stefanzweifel/git-auto-commit-action@v5
+          pip install -r requirements.txt
+
+      - name: 运行回测
+        env:
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: python backtest_engine.py
+
+      - name: 上传回测结果
+        uses: actions/upload-artifact@v4
         with:
-          commit_message: "Auto update backtest results"
-          file_pattern: "backtest/performance.json"
+          name: 回测输出
+          path: backtest_result.txt
