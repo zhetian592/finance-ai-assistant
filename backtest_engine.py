@@ -3,16 +3,17 @@ import pandas as pd
 import baostock as bs
 from datetime import datetime, timedelta
 import os
+import numpy as np
 
 # ---------- 策略参数 ----------
 TOP_N = 3
-REBALANCE_WEEKDAY = 0      # 周一调仓
+REBALANCE_WEEKDAY = 0      # 周一调仓 (0=周一, 6=周日)
 START_DATE = '2021-06-01'
 END_DATE = '2025-06-01'
 INITIAL_CASH = 50000
 COMMISSION = 0.0003
 
-# ---------- 行业指标映射（与 data_fetcher 中保持一致） ----------
+# ---------- 行业指标映射（需与 data_fetcher 中一致） ----------
 SECTOR_CODE_MAP = {
     '食品饮料': 'sh.000807', '医药生物': 'sh.000808', '银行': 'sh.000134',
     '电子': 'sh.000066', '计算机': 'sh.000068', '建筑材料': 'sh.000150',
@@ -48,7 +49,7 @@ def download_sector_data(data_dir='./data'):
         df.to_csv(filepath)
     bs.logout()
 
-# ---------- 因子计算（简化版，与 sector_rotator 一致的逻辑） ----------
+# ---------- 因子计算函数（简化版） ----------
 def calc_valuation_score(pe_percentile):
     if pe_percentile is None:
         return 50.0
@@ -58,12 +59,10 @@ def calc_momentum_score(close_series, period=20):
     if close_series is None or len(close_series) < period + 1:
         return 50.0
     ret = (close_series.iloc[-1] - close_series.iloc[-period]) / close_series.iloc[-period]
-    import numpy as np
     return np.clip((ret + 0.1) / 0.3 * 100, 0, 100)
 
 def build_factor_df(price_dict, start, end):
     """基于收盘价计算估值分位和动量，生成得分表（资金、情绪用中性50）"""
-    import numpy as np
     dates = pd.date_range(start, end, freq='B')
     records = []
     for dt in dates:
@@ -71,7 +70,7 @@ def build_factor_df(price_dict, start, end):
             if dt not in df.index:
                 continue
             close_series = df.loc[:dt, 'close']
-            # 估值分位：用过去250天的收盘价代替PE（简单粗暴示例，实际应集成PE）
+            # 估值分位：用过去250天收盘价的高低位置模拟PE分位
             lookback = 250
             if len(close_series) >= lookback:
                 hist = close_series.iloc[-lookback:-1]
@@ -81,33 +80,38 @@ def build_factor_df(price_dict, start, end):
                 pe_percentile = 50.0
             val = calc_valuation_score(pe_percentile)
             mom = calc_momentum_score(close_series)
-            money = 50.0
-            sent = 50.0
+            money = 50.0   # 资金因子暂用中性
+            sent = 50.0    # 情绪因子暂用中性
             total = (val + mom + money + sent) / 4
             records.append([dt, sector, total])
-    return pd.DataFrame(records, columns=['date', 'sector', 'total_score']).set_index(['date', 'sector'])
+    df = pd.DataFrame(records, columns=['date', 'sector', 'total_score'])
+    df.set_index(['date', 'sector'], inplace=True)
+    return df
 
 # ---------- 策略定义 ----------
 class SectorRotation(bt.Strategy):
     params = (('factor_df', None),)
 
     def __init__(self):
-        # 安全获取所有唯一的行业名称（只取字符串，不要元组）
+        # 安全获取所有唯一的行业名称字符串列表
         self.sector_names = sorted(self.p.factor_df.index.get_level_values('sector').unique().tolist())
-        # 构建 daily_scores 字典
+        # 构建 daily_scores 字典：{date: {sector: score}}
         self.daily_scores = {}
         for dt, group in self.p.factor_df.groupby(level='date'):
-            self.daily_scores[dt.date()] = group['total_score'].to_dict()
+            scores = {}
+            for (date_val, sector), val in group['total_score'].items():
+                scores[sector] = val
+            self.daily_scores[dt.date()] = scores
 
     def next(self):
         dt = self.datas[0].datetime.date(0)
-        if dt.weekday() != 0:          # 仅在周一调仓
+        if dt.weekday() != REBALANCE_WEEKDAY:  # 只在指定工作日调仓
             return
         scores = self.daily_scores.get(dt)
         if scores is None:
             return
 
-        # 选 TOP_N
+        # 选择得分最高的 TOP_N 行业
         sorted_sec = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         top_sectors = [s for s, _ in sorted_sec[:TOP_N]]
 
@@ -117,7 +121,7 @@ class SectorRotation(bt.Strategy):
             if self.getposition(data).size > 0 and sec not in top_sectors:
                 self.close(data=data)
 
-        # 等权买入
+        # 等权买入 top_sectors
         if not top_sectors:
             return
         target_val = self.broker.getvalue() / len(top_sectors)
@@ -144,7 +148,7 @@ def run_backtest():
     cerebro = bt.Cerebro()
     cerebro.addstrategy(SectorRotation, factor_df=factor_df)
 
-    # 4. 添加数据 feeds（名称必须与策略中的 self.sector_names 一致）
+    # 4. 添加数据 feeds（名称必须与策略中 sector_names 一致）
     for sector, df in price_dict.items():
         data = bt.feeds.PandasData(dataname=df)
         cerebro.adddata(data, name=sector)
@@ -159,15 +163,16 @@ def run_backtest():
     results = cerebro.run()
     strat = results[0]
 
-    print(f'最终资金: {cerebro.broker.getvalue():.2f}')
+    final_value = cerebro.broker.getvalue()
+    print(f'最终资金: {final_value:.2f}')
     print(f'年化收益率: {strat.analyzers.returns.get_analysis()["rnorm100"]:.2f}%')
     print(f'最大回撤: {strat.analyzers.drawdown.get_analysis()["max"]["drawdown"]:.2f}%')
     print(f'夏普比率: {strat.analyzers.sharpe.get_analysis()["sharperatio"]:.2f}')
 
     # 保存结果
     with open('backtest_result.txt', 'w') as f:
-        f.write(f'初始资金: {cerebro.broker.getvalue():.2f}\n')
-        # 最终资金需要用 broker.getvalue() 再次获取？注意：cerebro.run() 后 value 是最终值，已经反映
+        f.write(f'初始资金: {INITIAL_CASH:.2f}\n')
+        f.write(f'最终资金: {final_value:.2f}\n')
         f.write(f'年化收益率: {strat.analyzers.returns.get_analysis()["rnorm100"]:.2f}%\n')
         f.write(f'最大回撤: {strat.analyzers.drawdown.get_analysis()["max"]["drawdown"]:.2f}%\n')
         f.write(f'夏普比率: {strat.analyzers.sharpe.get_analysis()["sharperatio"]:.2f}\n')
