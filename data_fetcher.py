@@ -37,12 +37,12 @@ def _logout_bs():
 atexit.register(_logout_bs)
 
 def get_sector_valuation(sector_name: str):
-    """估值分位：主源 baostock，备用源 akshare 东方财富行业板块"""
+    """获取 PE-TTM 历史分位 (0~100)，主源 baostock，备用源 akshare"""
     percentile = _get_valuation_from_baostock(sector_name)
     if percentile is not None:
         return percentile
 
-    logger.warning(f"{sector_name} baostock 估值失败，切换备用源 akshare")
+    logger.warning(f"{sector_name} baostock估值失败，切换备用源")
     percentile = _get_valuation_from_akshare(sector_name)
     if percentile is not None:
         return percentile
@@ -79,7 +79,7 @@ def _get_valuation_from_baostock(sector_name: str):
     return percentile
 
 def _get_valuation_from_akshare(sector_name: str):
-    """备用源：akshare 东方财富行业板块历史数据（无需额外参数）"""
+    """备用源：东方财富行业板块历史日行情（无需额外参数）"""
     em_map = {
         '食品饮料': '食品饮料', '医药生物': '医药生物', '银行': '银行',
         '电子': '电子', '计算机': '计算机', '建筑材料': '建筑材料',
@@ -93,7 +93,7 @@ def _get_valuation_from_akshare(sector_name: str):
         df = ak.stock_board_industry_hist_em(symbol=em_name)
         if df is None or df.empty:
             return None
-        # 该接口返回列包含 '市盈率'
+        # 列名：'日期'、'市盈率'等
         hist_pe = pd.to_numeric(df['市盈率'], errors='coerce').dropna()
         if hist_pe.empty:
             return None
@@ -136,5 +136,4 @@ def fetch_all_sector_data():
     return result
 
 def fetch_news():
-    """新闻抓取占位，后续可接入中文RSS"""
     return []
