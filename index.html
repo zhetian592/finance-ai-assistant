@@ -5,52 +5,55 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>财经AI决策仪表盘</title>
     <style>
+        :root {
+            --primary: #3498db;
+            --primary-dark: #2980b9;
+            --warning: #ffc107;
+            --danger: #e74c3c;
+            --success: #2ecc71;
+            --bg: #f5f5f5;
+            --card: white;
+            --text: #2c3e50;
+        }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 20px;
-            background-color: #f5f5f5;
+            background-color: var(--bg);
+            color: var(--text);
         }
-        h1 {
-            color: #2c3e50;
-            border-bottom: 2px solid #3498db;
-            padding-bottom: 10px;
-        }
+        h1 { border-bottom: 2px solid var(--primary); padding-bottom: 10px; }
         .card {
-            background: white;
+            background: var(--card);
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             padding: 20px;
             margin-bottom: 20px;
         }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-        }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: left;
-        }
-        th {
-            background-color: #f2f2f2;
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        input, button {
+            padding: 6px 10px;
+            margin: 4px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
         }
         button {
-            background-color: #3498db;
+            background-color: var(--primary);
             color: white;
             border: none;
-            padding: 8px 16px;
-            border-radius: 4px;
             cursor: pointer;
         }
-        button:hover {
-            background-color: #2980b9;
-        }
+        button:hover { background-color: var(--primary-dark); }
+        button:disabled { background-color: #95a5a6; cursor: not-allowed; }
         .alert {
             background-color: #fff3cd;
-            border-left: 5px solid #ffc107;
+            border-left: 5px solid var(--warning);
             padding: 12px;
             margin-bottom: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             border-radius: 4px;
         }
         .status-bar {
@@ -62,33 +65,30 @@
             color: #555;
         }
         .refresh-icon {
+            cursor: pointer;
             background: none;
             border: none;
             font-size: 20px;
-            cursor: pointer;
-            color: #3498db;
+            color: var(--primary);
         }
-        iframe {
-            width: 100%;
-            height: 700px;
-            border: 1px solid #ddd;
-            margin-top: 10px;
-        }
-        .file-upload {
-            margin-top: 15px;
+        .form-message { margin-top: 8px; padding: 8px; border-radius: 4px; font-size: 0.9em; }
+        .form-message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .form-message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .form-message.info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        iframe { width: 100%; height: 700px; border: 1px solid #ddd; margin-top: 10px; }
+        .loading { text-align: center; padding: 20px; color: #666; }
+        .token-hint {
+            background-color: #e7f3ff;
             padding: 10px;
-            background-color: #f8f9fa;
-            border-radius: 6px;
-        }
-        .file-upload label {
-            font-weight: bold;
-            margin-right: 10px;
-        }
-        .note {
+            border-radius: 4px;
+            margin-bottom: 15px;
             font-size: 0.85em;
-            color: #666;
-            margin-top: 10px;
+            border-left: 3px solid var(--primary);
         }
+        .token-hint code { background-color: #f0f0f0; padding: 2px 4px; border-radius: 3px; }
+        .token-input-group { display: flex; align-items: center; margin-bottom: 15px; flex-wrap: wrap; }
+        .token-input-group input { flex: 1; min-width: 250px; }
+        .token-status { margin-left: 10px; font-size: 0.9em; }
     </style>
 </head>
 <body>
@@ -104,32 +104,48 @@
         <button onclick="refreshReport()">立即刷新</button>
     </div>
 
+    <!-- Token 配置区域 -->
+    <div class="card">
+        <h2>🔑 GitHub 授权配置（仅需配置一次）</h2>
+        <div class="token-input-group">
+            <input type="password" id="github-token-input" placeholder="输入 GitHub Personal Access Token (需勾选 repo 和 workflow 权限)" style="flex:2;">
+            <button id="save-token-btn">保存 Token</button>
+            <span id="token-status" class="token-status"></span>
+        </div>
+        <div class="token-hint">
+            💡 如何获取Token？<br>
+            1. 访问 <a href="https://github.com/settings/tokens" target="_blank">GitHub Tokens</a> → Generate new token (classic)<br>
+            2. 勾选 <strong>repo</strong> 和 <strong>workflow</strong> 权限<br>
+            3. 生成后复制Token，粘贴到上方输入框并点击「保存 Token」即可。<br>
+            🔒 Token 仅保存在您浏览器的本地存储中，不会上传到任何服务器。
+        </div>
+    </div>
+
     <div class="card">
         <h2>💰 当前持仓</h2>
-        <div id="holdings-table">加载中...</div>
-        <div class="file-upload">
-            <label>📂 更新持仓：</label>
-            <input type="file" id="upload-holdings" accept=".json">
-            <button id="upload-btn" onclick="uploadHoldingsFile()">上传并替换 holdings.json</button>
-            <p class="note">
-                ⚠️ 提示：<br>
-                1. 如需修改持仓，请先点击下方“导出 holdings.json”按钮，编辑后用本地上传功能替换。<br>
-                2. 上传后可能需要 1-2 分钟 GitHub Pages 才会生效，请稍后刷新页面。<br>
-                3. 你也可以直接在 GitHub 仓库中编辑 <code>holdings.json</code> 文件。
-            </p>
+        <div id="holdings-table" class="loading">⏳ 加载中，请稍候...</div>
+        <div style="margin-top: 10px; font-size: 0.85em; color: #666;">
+            📌 提示：添加或修改持仓后会自动同步到 GitHub，请稍等几秒后刷新页面查看。
         </div>
-        <div style="margin-top: 10px;">
-            <button id="export-btn" onclick="exportHoldings()">📥 导出 holdings.json</button>
-        </div>
+    </div>
+
+    <div class="card">
+        <h2>✏️ 修改/新增持仓</h2>
+        <form id="holding-form">
+            <input type="text" id="code" placeholder="基金代码 (6位)" required>
+            <input type="text" id="name" placeholder="基金名称">
+            <input type="number" id="amount" placeholder="持有份额" step="any" required>
+            <input type="number" id="cost" placeholder="成本价" step="any" required>
+            <input type="number" id="current" placeholder="现价(可选)" step="any">
+            <button type="submit" id="submit-holding-btn">添加/更新</button>
+        </form>
+        <div id="form-message"></div>
     </div>
 
     <div class="card">
         <h2>🚀 触发AI分析</h2>
         <button id="trigger-btn">▶ 立即运行工作流 (推荐模式)</button>
         <div id="trigger-status"></div>
-        <p class="note">
-            📌 说明：点击后会跳转到 GitHub Actions 页面，你需要在网页上手动点击 “Run workflow” 按钮。
-        </p>
     </div>
 
     <div class="card">
@@ -138,135 +154,263 @@
     </div>
 
     <script>
-        // 仓库基础路径（GitHub Pages 根目录）
-        const BASE_PATH = '';
-        let currentHoldings = null;
+        // ==================== 配置 ====================
+        const REPO_OWNER = 'zhetian592';
+        const REPO_NAME = 'finance-ai-assistant';
+        const FILE_PATH = 'holdings.json';
+        const BRANCH = 'main';
+        const API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${FILE_PATH}`;
+        const WORKFLOW_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/workflows/fund.yml/dispatches`;
 
-        // ========== 加载持仓（直接从 GitHub Pages 获取） ==========
-        async function fetchHoldings() {
-            try {
-                const response = await fetch('holdings.json?t=' + Date.now());
-                if (!response.ok) throw new Error('文件不存在或无法访问');
-                const data = await response.json();
-                currentHoldings = data.holdings || data;
-                renderHoldingsTable(currentHoldings);
-            } catch (err) {
-                document.getElementById('holdings-table').innerHTML = '<p style="color:red;">❌ 无法加载持仓数据，请确保仓库中存在 holdings.json 文件。</p>';
-                console.error(err);
-            }
+        // Token 管理
+        let GITHUB_TOKEN = localStorage.getItem('github_token') || '';
+
+        // DOM 元素
+        const tokenInput = document.getElementById('github-token-input');
+        const saveTokenBtn = document.getElementById('save-token-btn');
+        const tokenStatusSpan = document.getElementById('token-status');
+        
+        // 初始化Token输入框
+        if (GITHUB_TOKEN) {
+            tokenInput.value = '********';
+            tokenStatusSpan.innerHTML = '✅ Token 已配置';
+            tokenStatusSpan.style.color = 'green';
+        } else {
+            tokenStatusSpan.innerHTML = '⚠️ 未配置 Token，请填入后保存';
+            tokenStatusSpan.style.color = 'orange';
         }
-
-        function renderHoldingsTable(holdings) {
-            if (!holdings || holdings.length === 0) {
-                document.getElementById('holdings-table').innerHTML = '<p>📭 暂无持仓，请添加基金。</p>';
+        
+        // 保存Token
+        saveTokenBtn.addEventListener('click', () => {
+            const newToken = tokenInput.value.trim();
+            if (!newToken) {
+                alert('请输入Token');
                 return;
             }
-            let totalValue = 0;
-            let totalCost = 0;
-            let cash = 50000; // 默认现金，实际可从 holdings.json 读取
-
-            let html = `<table>
-                <thead>
-                    <tr><th>代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>市值</th><th>浮动盈亏</th></tr>
-                </thead>
-                <tbody>`;
-            for (let h of holdings) {
-                const current = h.current || h.cost;
-                const value = h.amount * current;
-                const costValue = h.amount * h.cost;
-                const profit = value - costValue;
-                const profitPercent = (profit / costValue) * 100;
-                const profitColor = profit >= 0 ? 'green' : 'red';
-                totalValue += value;
-                totalCost += costValue;
+            localStorage.setItem('github_token', newToken);
+            GITHUB_TOKEN = newToken;
+            tokenInput.value = '********';
+            tokenStatusSpan.innerHTML = '✅ Token 已保存';
+            tokenStatusSpan.style.color = 'green';
+            // 重新加载持仓
+            loadHoldings();
+        });
+        
+        // 辅助函数：检查Token是否存在
+        function requireToken() {
+            if (!GITHUB_TOKEN) {
+                alert('请先在上方配置 GitHub Token');
+                throw new Error('No token');
+            }
+            return true;
+        }
+        
+        // ==================== GitHub API 调用 ====================
+        async function fetchHoldingsFromGitHub() {
+            const response = await fetch(`${API_URL}?ref=${BRANCH}`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            const content = atob(data.content);
+            const holdingsData = JSON.parse(content);
+            return {
+                holdings: holdingsData.holdings || [],
+                cash: holdingsData.cash || 50000,
+                sha: data.sha
+            };
+        }
+        
+        async function updateHoldingsOnGitHub(holdings, cash, sha) {
+            requireToken();
+            const content = JSON.stringify({ holdings, cash }, null, 2);
+            const encodedContent = btoa(unescape(encodeURIComponent(content)));
+            const response = await fetch(API_URL, {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `token ${GITHUB_TOKEN}`,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/vnd.github.v3+json'
+                },
+                body: JSON.stringify({
+                    message: '📝 通过仪表盘更新持仓',
+                    content: encodedContent,
+                    sha: sha,
+                    branch: BRANCH
+                })
+            });
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.message || response.statusText);
+            }
+            return await response.json();
+        }
+        
+        // ==================== 持仓管理 ====================
+        async function loadHoldings() {
+            const tableDiv = document.getElementById('holdings-table');
+            try {
+                tableDiv.innerHTML = '<div>⏳ 加载中...</div>';
+                const { holdings, cash, sha } = await fetchHoldingsFromGitHub();
+                window.currentHoldingsSha = sha;
+                window.currentCash = cash;
+                renderHoldingsTable(holdings, cash);
+            } catch (err) {
+                console.error(err);
+                tableDiv.innerHTML = `<div style="color:red;">❌ 加载失败: ${err.message}<br>请检查网络或Token权限。</div>`;
+            }
+        }
+        
+        function renderHoldingsTable(holdings, cash) {
+            if (!holdings.length) {
+                document.getElementById('holdings-table').innerHTML = '<div>📭 暂无持仓，请添加基金。</div>';
+                return;
+            }
+            let totalValue = cash;
+            let totalCost = cash;
+            let html = `<table><thead><tr><th>代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>市值</th><th>浮动盈亏</th><th>操作</th></tr></thead><tbody>`;
+            for (const h of holdings) {
+                const cur = h.current || h.cost;
+                const marketVal = h.amount * cur;
+                const costVal = h.amount * h.cost;
+                const profit = marketVal - costVal;
+                const profitPercent = (profit / costVal) * 100;
+                totalValue += marketVal;
+                totalCost += costVal;
                 html += `<tr>
                     <td>${h.code}</td>
                     <td>${h.name || '-'}</td>
                     <td>${h.amount.toFixed(2)}</td>
                     <td>${h.cost.toFixed(4)}</td>
-                    <td>${current.toFixed(4)}</td>
-                    <td>${value.toFixed(2)}</td>
-                    <td style="color:${profitColor};">${profit.toFixed(2)} (${profitPercent.toFixed(2)}%)</td>
+                    <td>${cur.toFixed(4)}</td>
+                    <td>${marketVal.toFixed(2)}</td>
+                    <td style="color:${profit>=0?'green':'red'}">${profit.toFixed(2)} (${profitPercent.toFixed(2)}%)</td>
+                    <td><button onclick="deleteHolding('${h.code}')" style="background:#e74c3c;">删除</button></td>
                 </tr>`;
             }
             const totalProfit = totalValue - totalCost;
             const totalProfitPercent = (totalProfit / totalCost) * 100;
-            html += `<tr style="background:#f0f0f0; font-weight:bold;">
+            html += `<tr style="background:#f8f9fa;font-weight:bold;">
                 <td colspan="5" style="text-align:right;">合计：</td>
                 <td>${totalValue.toFixed(2)}</td>
-                <td style="color:${totalProfit >= 0 ? 'green' : 'red'};">${totalProfit.toFixed(2)} (${totalProfitPercent.toFixed(2)}%)</td>
+                <td style="color:${totalProfit>=0?'green':'red'}">${totalProfit.toFixed(2)} (${totalProfitPercent.toFixed(2)}%)</td>
+                <td></td>
             </tr>`;
             html += `</tbody></table>`;
             document.getElementById('holdings-table').innerHTML = html;
         }
-
-        // ========== 导出 holdings.json ==========
-        function exportHoldings() {
-            if (!currentHoldings) {
-                alert('暂无持仓数据');
-                return;
+        
+        async function deleteHolding(code) {
+            if (!confirm(`确定删除基金 ${code} 吗？`)) return;
+            try {
+                const { holdings, cash, sha } = await fetchHoldingsFromGitHub();
+                const newHoldings = holdings.filter(h => h.code !== code);
+                const result = await updateHoldingsOnGitHub(newHoldings, cash, sha);
+                window.currentHoldingsSha = result.content.sha;
+                await loadHoldings();
+                refreshReport();
+                showMessage('success', `基金 ${code} 已删除`);
+            } catch (err) {
+                showMessage('error', `删除失败: ${err.message}`);
             }
-            const data = {
-                holdings: currentHoldings,
-                cash: 50000
-            };
-            const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'holdings.json';
-            a.click();
-            URL.revokeObjectURL(url);
         }
-
-        // ========== 上传 holdings.json 到 GitHub（需要个人 Token，这里只做演示） ==========
-        // 由于浏览器无法直接写入 GitHub 仓库，我们只能提供指导。
-        async function uploadHoldingsFile() {
-            const fileInput = document.getElementById('upload-holdings');
-            const file = fileInput.files[0];
-            if (!file) {
-                alert('请先选择文件');
-                return;
+        
+        document.getElementById('holding-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const submitBtn = document.getElementById('submit-holding-btn');
+            submitBtn.disabled = true;
+            try {
+                const code = document.getElementById('code').value.trim();
+                const name = document.getElementById('name').value.trim();
+                const amount = parseFloat(document.getElementById('amount').value);
+                const cost = parseFloat(document.getElementById('cost').value);
+                let current = parseFloat(document.getElementById('current').value);
+                if (isNaN(amount) || isNaN(cost)) throw new Error('份额和成本必须为数字');
+                if (!/^\d{6}$/.test(code)) throw new Error('基金代码必须为6位数字');
+                if (isNaN(current)) current = cost;
+                
+                const { holdings, cash, sha } = await fetchHoldingsFromGitHub();
+                const existingIdx = holdings.findIndex(h => h.code === code);
+                const newHolding = { code, name: name || code, amount, cost, current };
+                if (existingIdx >= 0) holdings[existingIdx] = newHolding;
+                else holdings.push(newHolding);
+                
+                const result = await updateHoldingsOnGitHub(holdings, cash, sha);
+                window.currentHoldingsSha = result.content.sha;
+                document.getElementById('holding-form').reset();
+                await loadHoldings();
+                refreshReport();
+                showMessage('success', `${existingIdx>=0?'更新':'添加'}基金 ${code} 成功`);
+            } catch (err) {
+                showMessage('error', `操作失败: ${err.message}`);
+            } finally {
+                submitBtn.disabled = false;
             }
-            alert('由于浏览器安全限制，无法直接上传到 GitHub。\n请手动将编辑好的 holdings.json 文件上传到你的 GitHub 仓库（通过网页或 Git 命令）。');
-            // 可选：提供跳转链接
-            window.open('https://github.com/zhetian592/finance-ai-assistant/edit/main/holdings.json', '_blank');
+        });
+        
+        // ==================== 触发工作流 ====================
+        async function triggerWorkflow() {
+            const btn = document.getElementById('trigger-btn');
+            const statusDiv = document.getElementById('trigger-status');
+            btn.disabled = true;
+            statusDiv.innerHTML = '<div class="form-message info">⏳ 正在触发工作流...</div>';
+            try {
+                requireToken();
+                const response = await fetch(WORKFLOW_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `token ${GITHUB_TOKEN}`,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/vnd.github.v3+json'
+                    },
+                    body: JSON.stringify({ ref: BRANCH, inputs: { mode: 'recommend' } })
+                });
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.message || response.statusText);
+                }
+                statusDiv.innerHTML = '<div class="form-message success">✅ 工作流已触发！请稍后刷新报告。</div>';
+            } catch (err) {
+                statusDiv.innerHTML = `<div class="form-message error">❌ 触发失败: ${err.message}</div>`;
+            } finally {
+                btn.disabled = false;
+                setTimeout(() => { statusDiv.innerHTML = ''; }, 5000);
+            }
         }
-
-        // ========== 报告版本检测 ==========
+        document.getElementById('trigger-btn').addEventListener('click', triggerWorkflow);
+        
+        // ==================== 报告版本检测 ====================
+        let currentVersion = null;
         async function fetchVersion() {
             try {
                 const res = await fetch('report_version.json?t=' + Date.now());
                 if (!res.ok) return;
                 const data = await res.json();
-                const updateTime = data.last_updated;
-                document.getElementById('report-time').innerText = new Date(updateTime).toLocaleString();
-                // 简单检测：对比版本号（存储在 localStorage）
-                const storedVer = localStorage.getItem('last_report_version');
-                if (storedVer && storedVer !== data.version) {
+                document.getElementById('report-time').innerText = new Date(data.last_updated).toLocaleString();
+                if (currentVersion === null) currentVersion = data.version;
+                else if (currentVersion !== data.version) {
                     document.getElementById('new-report-alert').style.display = 'flex';
+                    currentVersion = data.version;
                 }
-                localStorage.setItem('last_report_version', data.version);
             } catch(e) { console.warn(e); }
         }
-
         function refreshReport() {
             const iframe = document.getElementById('report-iframe');
             iframe.src = iframe.src.split('?')[0] + '?t=' + Date.now();
             document.getElementById('new-report-alert').style.display = 'none';
             fetchVersion();
         }
-
-        // ========== 触发工作流 ==========
-        function triggerWorkflow() {
-            window.open('https://github.com/zhetian592/finance-ai-assistant/actions/workflows/fund.yml', '_blank');
+        function startPolling() {
+            fetchVersion();
+            setInterval(fetchVersion, 30000);
         }
-        document.getElementById('trigger-btn').addEventListener('click', triggerWorkflow);
-
-        // ========== 初始化 ==========
-        fetchHoldings();
-        fetchVersion();
-        setInterval(fetchVersion, 30000);
+        function showMessage(type, text) {
+            const msgDiv = document.getElementById('form-message');
+            msgDiv.innerHTML = `<div class="form-message ${type}">${text}</div>`;
+            setTimeout(() => { msgDiv.innerHTML = ''; }, 4000);
+        }
+        
+        // 页面启动
+        loadHoldings();
+        startPolling();
     </script>
 </body>
 </html>
