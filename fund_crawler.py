@@ -35,7 +35,7 @@ def generate_report(mode='recommend', total_cash=50000):
     score_df = compute_sector_scores(sector_data, sentiment_map)
     top3 = score_df.head(3)
 
-    # 4. 生成报告
+    # 4. 生成报告（不拼接新闻列表）
     report = f"📊 财经AI决策报告\n"
     report += f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
     report += f"运行模式: {mode}\n"
