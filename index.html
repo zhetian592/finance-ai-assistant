@@ -16,9 +16,7 @@
             --text: #2c3e50;
             --border: #ddd;
         }
-        * {
-            box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 20px;
@@ -29,7 +27,6 @@
             margin-top: 0;
             border-bottom: 2px solid var(--primary);
             padding-bottom: 10px;
-            font-size: 1.8rem;
         }
         .card {
             background: var(--card);
@@ -38,23 +35,9 @@
             padding: 20px;
             margin-bottom: 20px;
         }
-        .compact-card {
-            padding: 15px 20px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 10px 0;
-            font-size: 0.9rem;
-        }
-        th, td {
-            border: 1px solid var(--border);
-            padding: 8px;
-            text-align: left;
-        }
-        th {
-            background-color: #f2f2f2;
-        }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 0.9rem; }
+        th, td { border: 1px solid var(--border); padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
         input, button {
             padding: 6px 10px;
             margin: 4px;
@@ -66,15 +49,9 @@
             color: white;
             border: none;
             cursor: pointer;
-            transition: background 0.2s;
         }
-        button:hover {
-            background-color: var(--primary-dark);
-        }
-        button:disabled {
-            background-color: #95a5a6;
-            cursor: not-allowed;
-        }
+        button:hover { background-color: var(--primary-dark); }
+        button:disabled { background-color: #95a5a6; cursor: not-allowed; }
         .small-btn {
             padding: 4px 8px;
             font-size: 0.8rem;
@@ -98,16 +75,8 @@
             background: var(--card);
             padding: 8px 15px;
             border-radius: 8px;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
         }
-        .report-time {
-            font-size: 0.9rem;
-            color: #555;
-        }
-        .action-buttons {
-            display: flex;
-            gap: 6px;
-        }
+        .action-buttons { display: flex; gap: 6px; }
         iframe {
             width: 100%;
             height: 600px;
@@ -121,21 +90,9 @@
             border-radius: 4px;
             font-size: 0.85rem;
         }
-        .form-message.success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        .form-message.error {
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        .form-message.info {
-            background-color: #d1ecf1;
-            color: #0c5460;
-            border: 1px solid #bee5eb;
-        }
+        .form-message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .form-message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .form-message.info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
         .token-hint {
             background-color: #e7f3ff;
             padding: 10px;
@@ -151,19 +108,15 @@
             flex-wrap: wrap;
             margin-bottom: 10px;
         }
-        .token-input-group input {
-            flex: 2;
-            min-width: 200px;
-        }
-        .loading {
-            text-align: center;
-            padding: 20px;
-            color: #666;
-        }
-        hr {
-            margin: 15px 0;
-            border: none;
-            border-top: 1px solid #eee;
+        .loading { text-align: center; padding: 20px; color: #666; }
+        hr { margin: 15px 0; border: none; border-top: 1px solid #eee; }
+        .guide-highlight {
+            background-color: #ffecb3;
+            border-left: 4px solid #ff9800;
+            padding: 12px;
+            margin-bottom: 15px;
+            border-radius: 6px;
+            font-weight: bold;
         }
     </style>
 </head>
@@ -171,7 +124,6 @@
 
 <h1>📈 财经AI决策辅助系统</h1>
 
-<!-- 状态栏 + 按钮 -->
 <div class="status-bar">
     <span class="report-time">📅 最新报告时间：<span id="report-time">--</span></span>
     <div class="action-buttons">
@@ -180,23 +132,25 @@
     </div>
 </div>
 
-<!-- 新报告提醒 -->
 <div id="new-report-alert" style="display: none;" class="alert">
-    <span>📢 有新报告已生成！点击刷新按钮查看最新内容。</span>
+    <span>📢 有新报告已生成！点击下方按钮刷新查看最新内容。</span>
     <button onclick="refreshReport()">立即刷新</button>
 </div>
 
-<!-- AI投资决策报告 iframe (放在顶部) -->
+<div id="global-feedback" style="margin-bottom: 10px;"></div>
+
 <div class="card compact-card">
     <h2 style="margin-top:0; margin-bottom:10px;">📄 AI投资决策报告</h2>
     <iframe id="report-iframe" src="fund_report.html" title="基金报告"></iframe>
 </div>
 
-<!-- GitHub Token 配置卡片（保存后可隐藏） -->
 <div id="token-card" class="card">
     <h2>🔑 GitHub 授权配置（仅需配置一次）</h2>
+    <div id="token-guide" class="guide-highlight" style="display: none;">
+        ⚠️ 首次使用请配置Token，否则无法同步持仓和触发分析！
+    </div>
     <div class="token-input-group">
-        <input type="password" id="github-token-input" placeholder="输入 GitHub Personal Access Token (需勾选 repo 和 workflow 权限)">
+        <input type="password" id="github-token-input" placeholder="输入 GitHub Personal Access Token (需勾选 repo 和 workflow 权限)" style="flex:2;">
         <button id="save-token-btn">保存 Token</button>
         <span id="token-status" class="token-status"></span>
     </div>
@@ -209,7 +163,6 @@
     </div>
 </div>
 
-<!-- 持仓管理卡片（表格+表单合并） -->
 <div class="card">
     <h2>💰 持仓管理</h2>
     <div id="holdings-table" class="loading">⏳ 加载中...</div>
@@ -238,26 +191,32 @@
     const API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${FILE_PATH}`;
     const WORKFLOW_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/workflows/fund.yml/dispatches`;
 
-    // Token 管理
     let GITHUB_TOKEN = localStorage.getItem('github_token') || '';
-
-    // DOM 元素
     const tokenInput = document.getElementById('github-token-input');
     const saveTokenBtn = document.getElementById('save-token-btn');
     const tokenStatusSpan = document.getElementById('token-status');
     const tokenCard = document.getElementById('token-card');
+    const tokenGuide = document.getElementById('token-guide');
 
-    // 如果已有 Token，则隐藏整个配置卡片
     if (GITHUB_TOKEN) {
         tokenCard.style.display = 'none';
     } else {
         tokenCard.style.display = 'block';
+        tokenGuide.style.display = 'block';
         tokenInput.value = '';
-        tokenStatusSpan.innerHTML = '⚠️ 未配置 Token，请填入后保存';
+        tokenStatusSpan.innerHTML = '⚠️ 未配置 Token';
         tokenStatusSpan.style.color = 'orange';
     }
 
-    // 保存Token
+    function showGlobalMessage(msg, type) {
+        const container = document.getElementById('global-feedback');
+        const div = document.createElement('div');
+        div.className = `form-message ${type}`;
+        div.innerText = msg;
+        container.appendChild(div);
+        setTimeout(() => div.remove(), 5000);
+    }
+
     saveTokenBtn.addEventListener('click', () => {
         const newToken = tokenInput.value.trim();
         if (!newToken) {
@@ -266,14 +225,14 @@
         }
         localStorage.setItem('github_token', newToken);
         GITHUB_TOKEN = newToken;
-        tokenCard.style.display = 'none';   // 保存后隐藏
-        // 重新加载持仓
+        tokenCard.style.display = 'none';
         loadHoldings();
+        showGlobalMessage('Token 已保存，持仓功能已启用', 'success');
     });
 
     function requireToken() {
         if (!GITHUB_TOKEN) {
-            alert('请先在上方配置 GitHub Token（页面顶部卡片）');
+            showGlobalMessage('请先配置 GitHub Token（页面顶部卡片）', 'error');
             throw new Error('No token');
         }
         return true;
@@ -340,7 +299,7 @@
         }
         let totalValue = cash;
         let totalCost = cash;
-        let html = `</table><thead><tr><th>代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>市值</th><th>浮动盈亏</th><th>操作</th></tr></thead><tbody>`;
+        let html = `<table><thead><tr><th>代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>市值</th><th>浮动盈亏</th><th>操作</th></tr></thead><tbody>`;
         for (const h of holdings) {
             const cur = h.current || h.cost;
             const marketVal = h.amount * cur;
@@ -420,19 +379,17 @@
         }
     });
 
+    function showMessage(type, text) {
+        const msgDiv = document.getElementById('form-message');
+        msgDiv.innerHTML = `<div class="form-message ${type}">${text}</div>`;
+        setTimeout(() => { msgDiv.innerHTML = ''; }, 4000);
+    }
+
     // ==================== 触发工作流 ====================
     async function triggerWorkflow() {
         const btn = document.getElementById('trigger-workflow-btn');
-        const statusDiv = document.getElementById('trigger-status');
-        if (!statusDiv) {
-            const tempDiv = document.createElement('div');
-            tempDiv.id = 'trigger-status';
-            tempDiv.style.marginTop = '8px';
-            btn.parentNode.insertBefore(tempDiv, btn.nextSibling);
-        }
-        const statusEl = document.getElementById('trigger-status');
         btn.disabled = true;
-        if (statusEl) statusEl.innerHTML = '<div class="form-message info">⏳ 正在触发工作流...</div>';
+        showGlobalMessage('⏳ 正在触发工作流，请稍后...', 'info');
         try {
             requireToken();
             const response = await fetch(WORKFLOW_URL, {
@@ -448,12 +405,11 @@
                 const err = await response.json();
                 throw new Error(err.message || response.statusText);
             }
-            if (statusEl) statusEl.innerHTML = '<div class="form-message success">✅ 工作流已触发！请稍后刷新报告。</div>';
+            showGlobalMessage('✅ 工作流已触发！约2分钟后新报告将生成，届时会出现新报告提醒。', 'success');
         } catch (err) {
-            if (statusEl) statusEl.innerHTML = `<div class="form-message error">❌ 触发失败: ${err.message}</div>`;
+            showGlobalMessage(`❌ 触发失败: ${err.message}`, 'error');
         } finally {
             btn.disabled = false;
-            setTimeout(() => { if (statusEl) statusEl.innerHTML = ''; }, 5000);
         }
     }
 
@@ -469,12 +425,12 @@
             if (currentVersion === null) {
                 currentVersion = data.version;
             } else if (currentVersion !== data.version) {
-                // 显示新报告提醒（也可以自动刷新，这里选择提醒）
                 const alertDiv = document.getElementById('new-report-alert');
                 if (alertDiv) alertDiv.style.display = 'flex';
                 currentVersion = data.version;
+                showGlobalMessage('检测到新报告版本，点击上方提示中的“立即刷新”查看。', 'info');
             }
-        } catch(e) { console.warn('版本检测失败', e); }
+        } catch(e) { console.warn(e); }
     }
 
     function refreshReport() {
@@ -485,6 +441,7 @@
         const alertDiv = document.getElementById('new-report-alert');
         if (alertDiv) alertDiv.style.display = 'none';
         fetchVersion();
+        showGlobalMessage('报告已刷新', 'success');
     }
 
     function startPolling() {
@@ -492,23 +449,13 @@
         setInterval(fetchVersion, 30000);
     }
 
-    function showMessage(type, text) {
-        const msgDiv = document.getElementById('form-message');
-        msgDiv.innerHTML = `<div class="form-message ${type}">${text}</div>`;
-        setTimeout(() => { msgDiv.innerHTML = ''; }, 4000);
-    }
-
-    // 绑定按钮事件
+    // 绑定事件
     document.getElementById('refresh-report-btn').addEventListener('click', refreshReport);
     document.getElementById('trigger-workflow-btn').addEventListener('click', triggerWorkflow);
 
-    // 页面启动
+    // 初始化
     loadHoldings();
     startPolling();
 </script>
-
-<!-- 用于显示工作流触发状态 -->
-<div id="trigger-status" style="margin-top: 5px;"></div>
-
 </body>
 </html>
