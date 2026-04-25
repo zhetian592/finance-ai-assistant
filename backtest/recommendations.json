@@ -375,5 +375,30 @@
     ],
     "market_risk": "medium",
     "events_count": 0
+  },
+  {
+    "date": "2026-04-25",
+    "recommendations": [
+      {
+        "code": "516960",
+        "name": "机械设备ETF(机械ETF)",
+        "amount": 10149,
+        "reason": "行业轮动：机械设备 综合得分77.6"
+      },
+      {
+        "code": "512010",
+        "name": "医药生物ETF(医药ETF)",
+        "amount": 7514,
+        "reason": "行业轮动：医药生物 综合得分57.5"
+      },
+      {
+        "code": "512980",
+        "name": "传媒ETF(传媒ETF)",
+        "amount": 7336,
+        "reason": "行业轮动：传媒 综合得分56.1"
+      }
+    ],
+    "market_risk": "medium",
+    "events_count": 0
   }
 ]
