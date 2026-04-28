@@ -9,7 +9,7 @@ from data_services import DataService
 
 logger = logging.getLogger(__name__)
 
-# 申万一级行业 → baostock/其他数据源代码（保留原映射）
+# 申万一级行业 → 指数代码（用于行情查询）
 SECTORS = {
     "农林牧渔": "sz.399110", "采掘": "sz.399120", "化工": "sz.399130",
     "钢铁": "sz.399140", "有色金属": "sz.399150", "电子": "sz.399160",
@@ -23,55 +23,68 @@ SECTORS = {
     "综合": "sz.399380",
 }
 
-# 全局数据服务实例
 _ds = DataService()
 
-# ==================== 估值因子 ====================
-def get_sector_valuation(sector_name: str) -> tuple:
-    """
-    从本地估值文件获取 PE 历史分位，返回 (得分, 是否有效)
-    得分 = 100 - pe_percentile，分位越低得分越高
-    """
-    val = _ds.get_valuation(sector_name)
+# -------------------- 1. 估值因子 --------------------
+def get_sector_valuation(sector: str) -> tuple:
+    """返回 (得分, 是否有效)，得分=100-PE分位，越高越低估"""
+    val = _ds.get_valuation(sector)
     if val and 'pe_percentile' in val:
-        pe_pct = val['pe_percentile']
-        score = 100 - pe_pct
-        logger.info(f"[估值] {sector_name}: PE分位={pe_pct:.1f}%, 得分={score:.1f}")
+        score = 100 - val['pe_percentile']
+        logger.info(f"[估值] {sector}: PE分位={val['pe_percentile']:.1f}%, 得分={score:.1f}")
         return score, True
     return None, False
 
-# ==================== 资金因子（暂时不可用） ====================
-def get_sector_money_flow(sector_name: str):
-    logger.debug(f"北向资金接口暂时不可用，跳过 {sector_name}")
+# -------------------- 2. 资金因子（暂不可用，返回 None）--------------------
+def get_sector_money_flow(sector: str) -> tuple:
+    # 北向资金接口不稳定，暂时跳过
     return None, False
 
-# ==================== 动量因子（基于 DataService 的行情数据） ====================
-def get_sector_momentum(sector_name: str, days: int = 20) -> tuple:
-    code = SECTORS.get(sector_name)
+# -------------------- 3. 动量因子（基于稳定行情源）--------------------
+def get_sector_momentum(sector: str, days: int = 20) -> tuple:
+    code = SECTORS.get(sector)
     if not code:
         return None, False
-    
-    # 通过 DataService 获取收盘价序列，内部已实现降级
     df = _ds.get_daily_ohlcv(code, count=days+10)
     if df is None or len(df) < days+1:
         return None, False
-    
-    close_series = df['close']
-    ret = (close_series.iloc[-1] - close_series.iloc[-days-1]) / close_series.iloc[-days-1]
-    # 将收益率映射到 0~100 分（假设收益范围 -0.1 ~ 0.2）
+    close = df['close'].values
+    ret = (close[-1] - close[-days-1]) / close[-days-1]
+    # 映射到 0~100（假设收益范围 -0.1 ~ 0.2）
     score = np.clip((ret + 0.1) / 0.3 * 100, 0, 100)
-    logger.info(f"[动量] {sector_name}: {days}日收益={ret:.2%}, 得分={score:.1f}")
+    logger.info(f"[动量] {sector}: {days}日收益={ret:.2%}, 得分={score:.1f}")
     return score, True
 
-# ==================== 情绪因子（暂不可用） ====================
-def get_sector_sentiment(sector_name: str, news_events: list):
+# -------------------- 4. 情绪因子（基于新闻事件+简单词库）--------------------
+def get_sector_sentiment(sector: str, news_events: list) -> tuple:
     if not news_events:
         return None, False
-    # 原有的简单关键词匹配逻辑（可保留，但通常无匹配）
-    # 省略具体实现，直接返回 None
-    return None, False
+    # 关键词映射：行业 → 相关关键词（可扩展）
+    sector_keywords = {
+        "建筑材料": ["水泥", "玻璃", "建材", "基建"],
+        "银行": ["银行", "降息", "信贷", "股息"],
+        "非银金融": ["券商", "保险", "证券"],
+        "电子": ["芯片", "半导体", "AI", "消费电子"],
+    }
+    keywords = sector_keywords.get(sector, [sector])
+    sentiment_scores = []
+    for evt in news_events:
+        text = evt.get('title', '') + " " + evt.get('summary', '')
+        if any(kw in text for kw in keywords):
+            sent = _ds.analyze_sentiment(text)
+            if sent['label'] == 'positive':
+                sentiment_scores.append(sent['score'] * 100)
+            elif sent['label'] == 'negative':
+                sentiment_scores.append((1 - sent['score']) * 100)
+            else:
+                sentiment_scores.append(50)
+    if not sentiment_scores:
+        return None, False
+    avg_score = np.mean(sentiment_scores)
+    logger.info(f"[情绪] {sector}: 相关新闻{len(sentiment_scores)}条, 得分={avg_score:.1f}")
+    return avg_score, True
 
-# ==================== 综合数据获取（与原逻辑相同） ====================
+# -------------------- 5. 综合数据获取 --------------------
 def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
     rows = []
     for sector in sector_list:
@@ -80,23 +93,19 @@ def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
         mom, mom_ok = get_sector_momentum(sector)
         sent, sent_ok = get_sector_sentiment(sector, news_events)
         
-        valid_scores = []
-        if val_ok:
-            valid_scores.append(val)
-        if money_ok:
-            valid_scores.append(money)
-        if mom_ok:
-            valid_scores.append(mom)
-        if sent_ok:
-            valid_scores.append(sent)
+        valid = []
+        if val_ok: valid.append(val)
+        if money_ok: valid.append(money)
+        if mom_ok: valid.append(mom)
+        if sent_ok: valid.append(sent)
         
-        if len(valid_scores) >= 2:
-            total_score = np.mean(valid_scores)
-        elif len(valid_scores) == 1:
-            total_score = valid_scores[0]
-            logger.info(f"{sector} 仅有一个有效因子({valid_scores[0]:.1f})，直接使用")
+        if len(valid) >= 2:
+            total = np.mean(valid)
+        elif len(valid) == 1:
+            total = valid[0]
+            logger.info(f"{sector} 仅一个有效因子({valid[0]:.1f})，直接使用")
         else:
-            total_score = 50.0
+            total = 50.0
         
         rows.append({
             "sector": sector,
@@ -104,8 +113,8 @@ def fetch_all_sector_data(sector_list: list, news_events: list) -> pd.DataFrame:
             "money_flow_score": money if money_ok else None,
             "momentum_score": mom if mom_ok else None,
             "sentiment_score": sent if sent_ok else None,
-            "total_score": total_score,
-            "effective_count": len(valid_scores),
+            "total_score": total,
+            "effective_count": len(valid)
         })
     df = pd.DataFrame(rows)
     df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
