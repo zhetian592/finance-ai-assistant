@@ -1,9 +1,18 @@
-backtrader
+# 基础网络与解析
+requests==2.31.0
+beautifulsoup4==4.12.3
+feedparser==6.0.11
+
+# 数据处理
+pandas>=2.0.0
+numpy>=1.24.0
+
+# 数据源
+akshare>=1.16.72
 baostock>=0.8.8
-akshare>=1.10.0
-pandas
-numpy
-openai>=1.0.0
-tushare
-feedparser
-requests
+
+# 可选行情源（如需 TickFlow，请取消注释）
+# tickflow>=0.1.0
+
+# 回测框架（可选，若不使用可注释）
+# backtrader>=1.9.78
