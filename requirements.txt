@@ -11,8 +11,5 @@ numpy>=1.24.0
 akshare>=1.16.72
 baostock>=0.8.8
 
-# 可选行情源（如需 TickFlow，请取消注释）
 # tickflow>=0.1.0
-
-# 回测框架（可选，若不使用可注释）
 # backtrader>=1.9.78
