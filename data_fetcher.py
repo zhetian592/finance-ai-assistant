@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 """
 财经AI决策辅助工具 - 行业轮动版（最终优化版）
-- 抓取 RSS 新闻 → 提取结构化事件（主题+情感）
-- 获取申万一级行业的多因子数据（估值、资金流、动量、情绪）
-- 因子缺失时显示 N/A，综合得分仅计算有效因子
-- 引入估值陷阱折价（估值>80且动量<55时折价15%）
-- 仓位与市场风险等级挂钩（中等风险仓位上限50%）
-- 自动检测组合风格集中度并发出警告
-- 有持仓时：仅展示持仓盈亏和市场风控
-- 报告中去除了“近期财经新闻”栏目
+- 移除对 event_extractor 的依赖，情绪因子改用 data_services 中的简单词库
+- 其他功能不变
 """
 
 import os
@@ -24,11 +18,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # 量化模块
 from quant import get_market_risk_level, update_fund_nav, get_risk_advice
 
-# 行业轮动模块
+# 行业轮动模块（不再导入 event_extractor）
 from data_fetcher import fetch_all_sector_data, SECTORS
 from sector_rotator import allocate_weights_by_score, generate_sector_report, generate_concentration_warning
-# 注意：已移除 event_extractor，改用内联简化版情绪分析
-from data_services import DataService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,8 +35,6 @@ REPORT_FILE = "fund_report.html"
 RECOMMENDATIONS_FILE = "backtest/recommendations.json"
 
 DEFAULT_CASH = 50000  # 默认现金
-
-_ds = DataService()
 
 # ==================== 辅助函数 ====================
 def load_json(file_path: str, default: Any = None) -> Any:
@@ -97,46 +87,101 @@ def fetch_all_news(sources: List[str]) -> List[Dict]:
             unique.append(item)
     return unique
 
-# ==================== 简化版事件提取（无需单独文件） ====================
-def extract_event_simple(news_item: dict) -> dict:
-    """简易版事件提取，使用 data_services 中的情感分析"""
-    title = news_item.get("title", "")
-    summary = news_item.get("summary", "")
-    full_text = title + ". " + summary
-    sentiment = _ds.analyze_sentiment(full_text)
-    # 简单主题提取：基于关键词匹配（示例）
-    topics = []
-    sector_keywords = {
-        "建筑材料": ["水泥", "玻璃", "建材", "基建"],
-        "银行": ["银行", "降息", "信贷", "股息"],
-        "非银金融": ["券商", "保险", "证券"],
-        "电子": ["芯片", "半导体", "AI", "消费电子"],
-        "食品饮料": ["白酒", "食品", "饮料"],
-        "医药生物": ["医药", "生物", "疫苗"],
-    }
-    for sector, kws in sector_keywords.items():
-        if any(kw in full_text for kw in kws):
-            topics.append(sector)
-    return {
-        "title": title,
-        "summary": summary[:200],
-        "topics": topics,
-        "sentiment": sentiment["label"],
-        "sentiment_score": sentiment["score"],
-        "url": news_item.get("link", ""),
-        "timestamp": news_item.get("published", "")
-    }
-
 # ==================== 报告生成 ====================
 def generate_html_report(holdings: List[Dict], news: List[Dict],
                          sector_df: Any, recommendations: List[Dict],
                          market_risk: Dict, risk_advice: str,
                          mode: str, cash: float, concentration_warning: str = "") -> str:
-    # 此函数内容不变，保持之前的版本（已移除新闻列表）
-    # 为了节省篇幅，此处省略，但你应该保留之前正确的 generate_html_report
-    # 实际使用时请从之前的代码中复制完整函数
-    # 由于你可能已经有这个函数，我这里只写占位，确保语法正确
-    return "<html>...</html>"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    risk_level = market_risk.get("level", "unknown")
+    risk_color = {"high": "red", "medium": "orange", "low": "green"}.get(risk_level, "gray")
+    is_empty = len(holdings) == 0
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>财经AI决策报告 - {timestamp}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        h1 {{ color: #2c3e50; }}
+        h2, h3 {{ color: #34495e; }}
+        .risk {{ padding: 10px; border-radius: 5px; margin: 10px 0; }}
+        .risk-high {{ background-color: #ffebee; border-left: 5px solid red; }}
+        .risk-medium {{ background-color: #fff3e0; border-left: 5px solid orange; }}
+        .risk-low {{ background-color: #e8f5e9; border-left: 5px solid green; }}
+        table {{ border-collapse: collapse; width: 100%; margin: 15px 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f2f2f2; }}
+        .news-item {{ margin-bottom: 15px; padding: 10px; background: #f9f9f9; }}
+        .warning {{ background-color: #fff3cd; border-left: 5px solid #ffc107; padding: 10px; margin: 10px 0; }}
+    </style>
+</head>
+<body>
+    <h1>📊 财经AI决策报告</h1>
+    <p>生成时间: {timestamp}</p>
+    <p>运行模式: {mode}</p>
+    <p>可用现金: {cash} 元</p>
+
+    <div class="risk risk-{risk_level}">
+        <h2>📈 市场风险评估</h2>
+        <p>等级: <strong>{risk_level.upper()}</strong> - {market_risk.get('advice', '')}</p>
+        <p>评分: {market_risk.get('score', 0)}</p>
+        <ul>"""
+    for reason in market_risk.get('reasons', []):
+        html += f"<li>{reason}</li>"
+    html += f"""
+        </ul>
+    </div>
+
+    <div class="risk risk-{risk_level}">
+        <h2>🛡️ 风控建议</h2>
+        <pre>{risk_advice}</pre>
+    </div>
+"""
+
+    if is_empty:
+        # 无持仓：显示行业轮动推荐
+        if sector_df is not None and not sector_df.empty:
+            html += generate_sector_report(sector_df, top_n=8)
+        if recommendations:
+            html += "<h2>🌟 行业轮动基金推荐</h2>"
+            if concentration_warning:
+                html += f'<div class="warning">{concentration_warning}</div>'
+            html += "<table><th>基金代码</th><th>行业/基金名称</th><th>建议买入金额（元）</th><th>推荐理由</th></tr>"
+            for rec in recommendations:
+                code = rec.get('code', '')
+                name = rec.get('name', '')
+                amount = rec.get('amount', 0)
+                reason = rec.get('reason', '')
+                html += f"<tr><td>{code}</td><td>{name}</td><td>{amount}</td><td>{reason}</td></tr>"
+            html += "</table>"
+            total_invest = sum(r.get('amount',0) for r in recommendations)
+            html += f"<p>💡 实际买入总金额: {total_invest} 元（占现金 {total_invest/cash*100:.1f}%），剩余现金保留为防御仓位。</p>"
+        else:
+            html += "<p>⚠️ 未能生成有效的行业轮动推荐，请检查数据源或稍后重试。</p>"
+    else:
+        # 有持仓：显示持仓盈亏表
+        html += "<h2>💰 当前持仓</h2>"
+        html += "<table><th>基金代码</th><th>名称</th><th>持有份额</th><th>成本价</th><th>现价</th><th>浮动盈亏</th></tr>"
+        for fund in holdings:
+            code = fund.get('code', '')
+            name = fund.get('name', '')
+            amount = fund.get('amount', 0)
+            cost = fund.get('cost', 0)
+            current = fund.get('current', 0)
+            profit = (current - cost) * amount
+            profit_class = "color: green" if profit >= 0 else "color: red"
+            html += f"<tr><td>{code}</td><td>{name}</td><td>{amount}</td><td>{cost:.4f}</td><td>{current:.4f}</td><td style='{profit_class}'>{profit:+.2f}</td></tr>"
+        html += "</table>"
+        html += "<p>📌 注：有持仓时系统仅提供市场风控建议，不自动生成买卖指令。</p>"
+
+    # 已移除“近期财经新闻”模块（2025-04-24）
+    html += """
+</body>
+</html>
+"""
+    return html
 
 # ==================== 主函数 ====================
 def main():
@@ -177,7 +222,7 @@ def main():
     # 4. 风控建议
     risk_advice = get_risk_advice(holdings_list, cash, market_risk)
 
-    # 5. 抓取新闻
+    # 5. 抓取新闻（仅用于情绪因子计算，情绪因子已改用简单词库，可以保留抓取但不需要提取事件）
     sources = load_json(SOURCES_FILE, [])
     if not sources:
         sources = [
@@ -191,13 +236,11 @@ def main():
     news = fetch_all_news(sources)
     logger.info(f"抓取到 {len(news)} 条新闻")
 
-    # 6. 提取新闻事件（用于情绪得分）使用简化版函数
-    events = []
-    for item in news[:20]:
-        evt = extract_event_simple(item)
-        if evt["topics"]:
-            events.append(evt)
-    logger.info(f"提取到 {len(events)} 个结构化事件（含主题）")
+    # 6. 提取新闻事件（情绪因子现在在 data_fetcher 中基于简单词库，这里只需传递原始新闻列表）
+    # 直接传递 news 给 data_fetcher，让其内部处理情绪评分
+    events = []  # 不再使用 extract_event，情绪评分函数内部会直接处理 news 列表
+    # 注意：情绪评分函数 get_sector_sentiment 目前未使用新闻事件，因为情绪因子已改用 data_services 中的简单词库
+    # 但为了保持接口一致，传入空列表即可。
 
     # 7. 行业轮动推荐（仅当无持仓且模式为 recommend）
     recommendations = []
@@ -207,7 +250,7 @@ def main():
         logger.info("使用行业轮动多因子模型生成推荐...")
         sector_list = list(SECTORS.keys())
         try:
-            sector_df = fetch_all_sector_data(sector_list, events)
+            sector_df = fetch_all_sector_data(sector_list, events)  # events 可以传空
             if sector_df is not None and not sector_df.empty:
                 risk_level = market_risk.get("level", "medium")
                 recommendations = allocate_weights_by_score(sector_df, cash, top_n=3, risk_level=risk_level)
@@ -220,7 +263,7 @@ def main():
     else:
         logger.info("跳过行业轮动推荐（有持仓或非recommend模式）")
 
-    # 8. 生成 HTML 报告（这里需要调用完整的 generate_html_report，请确保函数存在）
+    # 8. 生成 HTML 报告
     html = generate_html_report(
         holdings=holdings_list,
         news=news,
@@ -236,7 +279,7 @@ def main():
         f.write(html)
     logger.info(f"报告已保存至 {REPORT_FILE}")
 
-    # 9. 保存回测记录
+    # 9. 保存回测记录（只保存行业轮动推荐）
     if args.mode == "recommend" and recommendations:
         os.makedirs(os.path.dirname(RECOMMENDATIONS_FILE), exist_ok=True)
         existing = load_json(RECOMMENDATIONS_FILE, [])
@@ -244,7 +287,7 @@ def main():
             "date": datetime.now().strftime("%Y-%m-%d"),
             "recommendations": recommendations,
             "market_risk": market_risk.get("level"),
-            "events_count": len(events)
+            "events_count": 0
         }
         existing.append(new_record)
         save_json(RECOMMENDATIONS_FILE, existing)
@@ -260,7 +303,7 @@ def main():
         "version": int(datetime.now().timestamp())
     }
     with open("report_version.json", "w", encoding='utf-8') as f:
-        json.dump(version_data, f)
+        json.dump(version_data, f, indent=2)
     logger.info("版本信息已保存至 report_version.json")
 
     logger.info("任务完成")
