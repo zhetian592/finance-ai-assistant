@@ -811,5 +811,29 @@
       }
     ],
     "market_risk": "low"
+  },
+  {
+    "date": "2026-05-11",
+    "recommendations": [
+      {
+        "code": "159745",
+        "name": "建筑材料ETF(建材ETF)",
+        "amount": 14167,
+        "reason": "行业轮动：建筑材料 综合得分72.1"
+      },
+      {
+        "code": "512880",
+        "name": "非银金融ETF(证券ETF)",
+        "amount": 13406,
+        "reason": "行业轮动：非银金融 综合得分68.2"
+      },
+      {
+        "code": "516960",
+        "name": "机械设备ETF(机械ETF)",
+        "amount": 12426,
+        "reason": "行业轮动：机械设备 综合得分63.2"
+      }
+    ],
+    "market_risk": "low"
   }
 ]
