@@ -931,5 +931,29 @@
       }
     ],
     "market_risk": "low"
+  },
+  {
+    "date": "2026-05-16",
+    "recommendations": [
+      {
+        "code": "516880",
+        "name": "电气设备ETF(新能源ETF)",
+        "amount": 13621,
+        "reason": "行业轮动：电气设备 综合得分57.4"
+      },
+      {
+        "code": "516110",
+        "name": "汽车ETF(汽车ETF)",
+        "amount": 13431,
+        "reason": "行业轮动：汽车 综合得分56.6"
+      },
+      {
+        "code": "516120",
+        "name": "化工ETF(化工ETF)",
+        "amount": 12947,
+        "reason": "行业轮动：化工 综合得分54.6"
+      }
+    ],
+    "market_risk": "low"
   }
 ]
